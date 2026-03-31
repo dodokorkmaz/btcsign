@@ -3401,51 +3401,20 @@ function calcNetFlowScore(){
 // VPN gerekmez
 // ════════════════════════════════════════════════════════
 async function loadCryptoPanic(){
-  var BULL=['bullish','surge','rally','breakout','adoption','ath','record','support','buy','institutional','etf','approve','launch','upgrade','partnership','rise','all-time'];
-  var BEAR=['bearish','crash','dump','ban','hack','lawsuit','fine','restriction','sell','plunge','crisis','scam','fraud','warning','collapse','decline','drop'];
-  // auth_token=free çalışmıyor — public=true ile dene, 2 URL + 2 proxy
-  var URLS=[
-    'https://cryptopanic.com/api/free/v1/posts/?currencies=BTC&public=true&kind=news',
-    'https://cryptopanic.com/api/v1/posts/?currencies=BTC&public=true&kind=news'
-  ];
-  for(var ui=0;ui<URLS.length;ui++){
-    var proxies=[
-      'https://corsproxy.io/?'+encodeURIComponent(URLS[ui]),
-      'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(URLS[ui])
-    ];
-    for(var pi=0;pi<proxies.length;pi++){
-      try {
-        var r=await fetch(proxies[pi],{cache:'no-store',signal:AbortSignal.timeout(8000)});
-        if(r.ok){
-          var j=await r.json();
-          if(j&&j.results&&j.results.length){
-            var items=[], totalScore=0;
-            j.results.slice(0,15).forEach(function(post){
-              var title=(post.title||'').toLowerCase();
-              var bP=BULL.filter(function(w){return title.includes(w);}).length;
-              var brP=BEAR.filter(function(w){return title.includes(w);}).length;
-              var votes=post.votes||{};
-              var imp=(votes.positive||0)-(votes.negative||0);
-              var sentiment=bP>brP?'bull':brP>bP?'bear':'neutral';
-              totalScore+=(bP-brP)*(1+Math.min(Math.abs(imp)*0.1,2));
-              items.push({title:post.title||'',url:(post.url||''),source:(post.source&&post.source.title)||'CryptoPanic',published_at:post.published_at||'',sentiment:sentiment,votes:imp});
-            });
-            S.cryptoPanicNews=items;
-            S.cryptoPanicScore=Math.max(-100,Math.min(100,Math.round(totalScore*5)));
-            S.status['cpanic']='ok';
-            return;
-          }
-        }
-      } catch(e){}
-    }
-  }
-  // Tüm denemeler başarısız — RSS sentiment kullan
+  // CryptoPanic artık ücretsiz public erişimi kapattı (404)
+  // RSS haber sentimental kullan (loadNews'ten geliyor)
   if(S.newsLoaded&&S.news.length>0){
-    S.cryptoPanicScore=S.newsSentScore;
-    S.cryptoPanicNews=S.news.slice(0,8).map(function(n){return {title:n.title,url:n.url||'',source:n.source||'RSS',published_at:n.published_at||'',sentiment:n._bullPts>n._bearPts?'bull':n._bearPts>n._bullPts?'bear':'neutral',votes:0};});
+    var score=S.newsSentScore||0;
+    S.cryptoPanicScore=score;
+    S.cryptoPanicNews=S.news.slice(0,10).map(function(n){
+      return {
+        title:n.title,url:n.url||'',source:n.source||'RSS',
+        published_at:n.published_at||'',
+        sentiment:n._bullPts>n._bearPts?'bull':n._bearPts>n._bullPts?'bear':'neutral',
+        votes:n._bullPts-n._bearPts
+      };
+    });
     S.status['cpanic']='rss';
-  } else {
-    S.status['cpanic']='err';
   }
 }
 
