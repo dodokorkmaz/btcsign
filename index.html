@@ -303,7 +303,7 @@ body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(r
   <!-- TABS -->
   <div class="tabs">
     <div class="tab" onclick="sw('scalp',this)" style="background:rgba(0,217,126,.08);border-color:rgba(0,217,126,.25);color:var(--G);font-weight:700">⚡ SCALP</div>
-    <div class="tab" onclick="sw('merkez',this)" style="background:rgba(167,139,250,.08);border-color:rgba(167,139,250,.25);color:var(--P);font-weight:700">◈ SİNYAL MERKEZİ</div>
+    <div class="tab" onclick="sw('merkez',this)" style="background:rgba(247,147,26,.1);border-color:rgba(247,147,26,.35);color:var(--O);font-weight:700">🎯 KARAR</div>
     <div class="tab on" onclick="sw('main',this)">Ana Sinyal</div>
     <div class="tab" onclick="sw('premium',this)" style="background:rgba(167,139,250,.08);border-color:rgba(167,139,250,.2);color:var(--P)">★ Premium</div>
     <div class="tab" onclick="sw('signals',this)">Çoklu TF</div>
@@ -5205,146 +5205,250 @@ function renMerkez(){
   var p=S.price||0;
   var html='';
 
-  // Scalp motoru
+  // ── Tüm motorları hesapla ──
   var sc=scalpSignal();
-  // Ana sinyal motoru
-  var cl=S.c1h,hi=S.h1h,lo=S.l1h,vols=S.v1h;
-  var ana=null;
-  if(cl&&cl.length>=50) ana=v9Signal(cl,hi,lo,vols);
-  // Premium motoru
+  var ana=(S.c1h&&S.c1h.length>=50)?v9Signal(S.c1h,S.h1h,S.l1h,S.v1h):null;
   var pm=premiumSignal();
+  var atrV=(S.c1h&&S.h1h&&S.l1h)?atr(S.h1h.slice(-20),S.l1h.slice(-20),S.c1h.slice(-20)):0;
+  var ofS=calcOrderFlowScore();
+  var utcH=new Date().getUTCHours();
+  var seans=utcH>=8&&utcH<17?'Londra':utcH>=13&&utcH<22?'New York':utcH>=0&&utcH<8?'Asya':'Ölü Zone';
+  var seansOk=seans==='Londra'||seans==='New York';
 
-  // Güncelleme zamanı
-  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:2px;color:var(--t2);margin-bottom:12px">◈ SİNYAL MERKEZİ · 3 MOTOR · '+new Date().toLocaleTimeString('tr-TR')+'</div>';
+  // ── 8 KRİTER DEĞERLENDİRME ──
+  // Her kriter: {label, value, status: 'good'/'warn'/'bad'/'neutral', detail, dir}
+  var kriterler=[];
 
-  // ─ 3 motor yan yana grid ─
-  html+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">';
-
-  // SCALP MOTORU kartı
-  var scSig=sc?sc.sig:'--';
-  var scC=scSig==='LONG'?'var(--G)':scSig==='SHORT'?'var(--R)':'var(--Y)';
-  var scBg=scSig==='LONG'?'rgba(0,217,126,.06)':scSig==='SHORT'?'rgba(255,59,92,.06)':'rgba(251,191,36,.03)';
-  var scBd=scSig==='LONG'?'rgba(0,217,126,.35)':scSig==='SHORT'?'rgba(255,59,92,.35)':'rgba(251,191,36,.2)';
-  html+='<div style="background:'+scBg+';border:1px solid '+scBd+';border-radius:12px;padding:16px;position:relative;overflow:hidden">';
-  html+='<div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,'+scC+',transparent)"></div>';
-  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:8px;color:var(--t2);letter-spacing:2px;margin-bottom:8px">⚡ SCALP · 15M</div>';
-  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:32px;font-weight:700;color:'+scC+';line-height:1;margin-bottom:8px">'+scSig+'</div>';
-  if(sc){
-    html+='<div style="font-size:9px;color:var(--t2);margin-bottom:4px">Güven: <b style="color:'+scC+'">%'+sc.confidence+'</b></div>';
-    html+='<div style="font-size:9px;color:var(--t2);margin-bottom:4px">Puan: <b style="color:'+scC+'">'+sc.activeScore+'p</b> (min 5)</div>';
-    if(sc.durEst&&scSig!=='BEKLE') html+='<div style="font-size:9px;color:var(--Y)">⏱ '+sc.durEst+'</div>';
-    if(sc.tp&&scSig!=='BEKLE'){
-      html+='<div style="margin-top:8px;font-family:\'IBM Plex Mono\',monospace;font-size:9px">';
-      html+='<span style="color:var(--G)">TP $'+Math.round(sc.tp).toLocaleString('tr-TR')+'</span> · <span style="color:var(--R)">SL $'+Math.round(sc.sl).toLocaleString('tr-TR')+'</span>';
-      html+='</div>';
-    }
-    if(sc.isContraTrend) html+='<div style="margin-top:6px;font-size:8px;color:var(--Y)">⚠ KONTR TREND</div>';
+  // 1. FONLAMA
+  var fund=S.funding;
+  var fundMins=S.fundingNextTs?Math.floor((S.fundingNextTs-Date.now())/60000):null;
+  var fundStatus='neutral', fundDir=null, fundDetail='', fundVal='--';
+  if(fund!=null){
+    fundVal=(fund*100).toFixed(4)+'%';
+    if(fund<-0.0002){ fundStatus='good'; fundDir='LONG'; fundDetail='Negatif → Short maliyetli'+(fundMins!=null&&fundMins<=45?' · '+fundMins+'dk kaldı ⚡':''); }
+    else if(fund<0){ fundStatus='warn'; fundDir='LONG'; fundDetail='Hafif negatif'; }
+    else if(fund>0.0015){ fundStatus='bad'; fundDir='SHORT'; fundDetail='Yüksek → Long maliyetli'+(fundMins!=null&&fundMins<=45?' · '+fundMins+'dk kaldı ⚡':''); }
+    else if(fund>0.0007){ fundStatus='warn'; fundDir='SHORT'; fundDetail='Hafif pozitif'; }
+    else { fundStatus='neutral'; fundDetail='Normal bölge'; }
   }
-  html+='</div>';
+  kriterler.push({label:'Fonlama',val:fundVal,status:fundStatus,dir:fundDir,detail:fundDetail,icon:'💰'});
 
-  // ANA SİNYAL (V13) kartı
-  var anaSig=ana?ana.sig:'--';
-  var anaC=anaSig==='LONG'?'var(--G)':anaSig==='SHORT'?'var(--R)':'var(--Y)';
-  var anaBg=anaSig==='LONG'?'rgba(0,217,126,.06)':anaSig==='SHORT'?'rgba(255,59,92,.06)':'rgba(251,191,36,.03)';
-  var anaBd=anaSig==='LONG'?'rgba(0,217,126,.35)':anaSig==='SHORT'?'rgba(255,59,92,.35)':'rgba(251,191,36,.2)';
-  html+='<div style="background:'+anaBg+';border:1px solid '+anaBd+';border-radius:12px;padding:16px;position:relative;overflow:hidden">';
-  html+='<div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,'+anaC+',transparent)"></div>';
-  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:8px;color:var(--t2);letter-spacing:2px;margin-bottom:8px">◆ ANA SİNYAL V13 · 1H</div>';
-  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:32px;font-weight:700;color:'+anaC+';line-height:1;margin-bottom:8px">'+anaSig+'</div>';
-  if(ana){
-    html+='<div style="font-size:9px;color:var(--t2);margin-bottom:4px">Güven: <b style="color:'+anaC+'">%'+ana.confidence+'</b></div>';
-    html+='<div style="font-size:9px;color:var(--t2);margin-bottom:4px">Oy: <b>'+Math.max(ana.longVotes,ana.shortVotes)+'/6</b> · Trend: '+ana.trendDir+'</div>';
-    if(ana.sig!=='NEUTRAL'&&p){
-      var atrV=ana.atrV||0;
-      var tp1a=ana.sig==='LONG'?p+atrV*ana.tpMult:p-atrV*ana.tpMult;
-      var sla=ana.sig==='LONG'?p-atrV*ana.slMult:p+atrV*ana.slMult;
-      html+='<div style="margin-top:8px;font-family:\'IBM Plex Mono\',monospace;font-size:9px">';
-      html+='<span style="color:var(--G)">TP $'+Math.round(tp1a).toLocaleString('tr-TR')+'</span> · <span style="color:var(--R)">SL $'+Math.round(sla).toLocaleString('tr-TR')+'</span>';
-      html+='</div>';
-    }
-    if(ana.volRegime) html+='<div style="margin-top:5px;font-size:8px;color:var(--t2)">VOL: '+ana.volRegime+'</div>';
+  // 2. L/S ORANI
+  var lsStatus='neutral', lsDir=null, lsDetail='', lsVal='--';
+  if(S.lsRatio!=null){
+    lsVal=S.lsRatio.toFixed(2);
+    if(S.lsRatio<0.75){ lsStatus='good'; lsDir='LONG'; lsDetail='Aşırı short → Squeeze riski'; }
+    else if(S.lsRatio<0.90){ lsStatus='warn'; lsDir='LONG'; lsDetail='Short ağırlıklı'; }
+    else if(S.lsRatio>1.80){ lsStatus='bad'; lsDir='SHORT'; lsDetail='Aşırı long → Dump riski'; }
+    else if(S.lsRatio>1.40){ lsStatus='warn'; lsDir='SHORT'; lsDetail='Long ağırlıklı'; }
+    else { lsStatus='neutral'; lsDetail='Dengeli'; }
   }
-  html+='</div>';
+  kriterler.push({label:'L/S Oranı',val:lsVal,status:lsStatus,dir:lsDir,detail:lsDetail,icon:'⚖️'});
 
-  // PREMIUM kartı
+  // 3. ORDER FLOW
+  var ofStatus='neutral', ofDir=null, ofDetail='', ofVal='--';
+  if(S.ofConnected&&ofS.pct!==50){
+    ofVal='%'+ofS.pct+' alım';
+    if(ofS.pct>=65){ ofStatus='good'; ofDir='LONG'; ofDetail='Güçlü alım baskısı'; }
+    else if(ofS.pct>=55){ ofStatus='warn'; ofDir='LONG'; ofDetail='Hafif alım baskısı'; }
+    else if(ofS.pct<=35){ ofStatus='bad'; ofDir='SHORT'; ofDetail='Güçlü satış baskısı'; }
+    else if(ofS.pct<=45){ ofStatus='warn'; ofDir='SHORT'; ofDetail='Hafif satış baskısı'; }
+    else { ofStatus='neutral'; ofDetail='Dengeli akış'; }
+    // Balina varsa vurgula
+    if(S.ofWhaleTs&&(Date.now()-S.ofWhaleTs)<120000){
+      var wa=S.ofWhaleAlert;
+      ofDetail+=' · 🐳 $'+Math.round(wa.usd/1000)+'K '+wa.side;
+      if(wa.side==='BUY') ofDir='LONG';
+      else ofDir='SHORT';
+    }
+  } else if(!S.ofConnected){
+    ofVal='Bağlanıyor...'; ofDetail='WebSocket bekleniyor';
+  }
+  kriterler.push({label:'Order Flow',val:ofVal,status:ofStatus,dir:ofDir,detail:ofDetail,icon:'📊'});
+
+  // 4. LİKİDİTE HARİTASI
+  var liqStatus='neutral', liqDir=null, liqDetail='', liqVal='--';
+  if(S.liqLevels&&S.liqLevels.length&&p){
+    var nearLong=S.liqLevels.filter(function(l){return l.side==='LONG'&&Math.abs(l.price-p)/p<0.03;}).sort(function(a,b){return b.density-a.density;})[0];
+    var nearShort=S.liqLevels.filter(function(l){return l.side==='SHORT'&&Math.abs(l.price-p)/p<0.03;}).sort(function(a,b){return b.density-a.density;})[0];
+    if(nearLong&&nearLong.pct<0){
+      var distL=Math.abs(nearLong.pct).toFixed(1);
+      liqVal='$'+Math.round(nearLong.price).toLocaleString('tr-TR');
+      liqStatus=parseFloat(distL)<1.5?'good':'warn';
+      liqDir='LONG'; liqDetail='Long liki %'+distL+' aşağıda → Dönüş bölgesi';
+    } else if(nearShort&&nearShort.pct>0){
+      var distS=nearShort.pct.toFixed(1);
+      liqVal='$'+Math.round(nearShort.price).toLocaleString('tr-TR');
+      liqStatus=parseFloat(distS)<1.5?'good':'warn';
+      liqDir='SHORT'; liqDetail='Short liki %'+distS+' yukarıda → Direnç bölgesi';
+    } else { liqVal='Uzak'; liqDetail='Yakın liki bölgesi yok'; }
+  } else { liqVal='Hesaplanıyor...'; liqDetail='1H veri gerekli'; }
+  kriterler.push({label:'Likidasyon',val:liqVal,status:liqStatus,dir:liqDir,detail:liqDetail,icon:'🗺'});
+
+  // 5. 3 MOTOR OYU
+  var scSig=sc?sc.sig:'BEKLE';
+  var anaSig=ana?ana.sig:'NEUTRAL';
   var pmSig=pm.sig==='WAIT'?'BEKLE':pm.sig;
-  var pmC=pmSig==='LONG'?'var(--G)':pmSig==='SHORT'?'var(--R)':'var(--P)';
-  var pmBg=pmSig==='LONG'?'rgba(0,217,126,.06)':pmSig==='SHORT'?'rgba(255,59,92,.06)':'rgba(167,139,250,.04)';
-  var pmBd=pmSig==='LONG'?'rgba(0,217,126,.35)':pmSig==='SHORT'?'rgba(255,59,92,.35)':'rgba(167,139,250,.25)';
-  html+='<div style="background:'+pmBg+';border:1px solid '+pmBd+';border-radius:12px;padding:16px;position:relative;overflow:hidden">';
-  html+='<div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,'+pmC+',transparent)"></div>';
-  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:8px;color:var(--t2);letter-spacing:2px;margin-bottom:8px">★ PREMIUM · SWING</div>';
-  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:32px;font-weight:700;color:'+pmC+';line-height:1;margin-bottom:8px">'+pmSig+'</div>';
-  html+='<div style="font-size:9px;color:var(--t2);margin-bottom:4px">Koşul: <b style="color:'+pmC+'">'+pm.metCount+'/5</b> · Sınıf: <b>'+( pm.gradeLabel||'--')+'</b></div>';
-  html+='<div style="font-size:9px;color:var(--t2);margin-bottom:4px">Ağırlık: <b>'+pm.activeWeight+'/'+pm.maxWeight+'</b></div>';
-  var pmBar=Math.round(pm.progress);
-  html+='<div style="height:4px;background:var(--dim2);border-radius:2px;margin-top:8px;overflow:hidden"><div style="height:100%;width:'+pmBar+'%;background:'+pmC+';border-radius:2px"></div></div>';
-  html+='</div>';
-  html+='</div>'; // grid kapanış
+  var motorLong=[scSig,anaSig,pmSig].filter(function(s){return s==='LONG';}).length;
+  var motorShort=[scSig,anaSig,pmSig].filter(function(s){return s==='SHORT';}).length;
+  var motorStatus='neutral', motorDir=null, motorDetail='', motorVal='--';
+  motorVal=motorLong+'/3 LONG · '+motorShort+'/3 SHORT';
+  if(motorLong===3){ motorStatus='good'; motorDir='LONG'; motorDetail='3 motor hemfikir → Güçlü giriş'; }
+  else if(motorShort===3){ motorStatus='good'; motorDir='SHORT'; motorDetail='3 motor hemfikir → Güçlü giriş'; }
+  else if(motorLong===2){ motorStatus='warn'; motorDir='LONG'; motorDetail='2/3 motor LONG'; }
+  else if(motorShort===2){ motorStatus='warn'; motorDir='SHORT'; motorDetail='2/3 motor SHORT'; }
+  else { motorStatus='bad'; motorDetail='Motorlar karışık → Bekle'; }
+  kriterler.push({label:'Motor Oyları',val:motorVal,status:motorStatus,dir:motorDir,detail:motorDetail,icon:'🔮'});
 
-  // ─ CONFLUENCE DURUMU ─
-  // 3 motor aynı yönü gösteriyorsa büyük uyarı
-  var allLong=scSig==='LONG'&&anaSig==='LONG'&&pmSig==='LONG';
-  var allShort=scSig==='SHORT'&&anaSig==='SHORT'&&pmSig==='SHORT';
-  var twoLong=(scSig==='LONG'&&anaSig==='LONG')||(scSig==='LONG'&&pmSig==='LONG')||(anaSig==='LONG'&&pmSig==='LONG');
-  var twoShort=(scSig==='SHORT'&&anaSig==='SHORT')||(scSig==='SHORT'&&pmSig==='SHORT')||(anaSig==='SHORT'&&pmSig==='SHORT');
+  // 6. SCALP TEYİT
+  var teyitStatus='neutral', teyitDir=null, teyitDetail='', teyitVal='--';
+  var confirmed=S.scalpConfirmed;
+  var buf=S.scalpConfirmBuf||[];
+  var bufLong=buf.filter(function(s){return s==='LONG';}).length;
+  var bufShort=buf.filter(function(s){return s==='SHORT';}).length;
+  if(confirmed==='LONG'){ teyitStatus='good'; teyitDir='LONG'; teyitVal='TEYİT: LONG'; teyitDetail=bufLong+'/3 teyit · Giriş hazır'; }
+  else if(confirmed==='SHORT'){ teyitStatus='good'; teyitDir='SHORT'; teyitVal='TEYİT: SHORT'; teyitDetail=bufShort+'/3 teyit · Giriş hazır'; }
+  else if(bufLong>=1||bufShort>=1){ teyitStatus='warn'; teyitVal='BEKLİYOR '+Math.max(bufLong,bufShort)+'/3'; teyitDetail='Teyit için '+( bufLong>=1?'LONG':'SHORT')+' bekleniyor'; }
+  else { teyitStatus='bad'; teyitVal='TEYİT YOK'; teyitDetail='Sinyal bekleniyor'; }
+  kriterler.push({label:'Scalp Teyit',val:teyitVal,status:teyitStatus,dir:teyitDir,detail:teyitDetail,icon:'✅'});
 
-  if(allLong||allShort){
-    var confDir=allLong?'LONG':'SHORT';
-    var confC=allLong?'var(--G)':'var(--R)';
-    var confBg=allLong?'rgba(0,217,126,.1)':'rgba(255,59,92,.1)';
-    var confBd=allLong?'rgba(0,217,126,.5)':'rgba(255,59,92,.5)';
-    html+='<div style="background:'+confBg+';border:2px solid '+confBd+';border-radius:12px;padding:16px;margin-bottom:12px;text-align:center">';
-    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;letter-spacing:3px;color:'+confC+';margin-bottom:6px">★ 3/3 MOTOR HEMFÍKIR ★</div>';
-    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:28px;font-weight:700;color:'+confC+'">EN GÜÇLÜ '+confDir+' SİNYALİ</div>';
-    html+='<div style="font-size:11px;color:var(--t2);margin-top:6px">Scalp + Ana Sinyal + Premium aynı yönü gösteriyor — nadir görülen yüksek conviction sinyal</div>';
-    html+='</div>';
-  } else if(twoLong||twoShort){
-    var t2Dir=twoLong?'LONG':'SHORT';
-    var t2C=twoLong?'var(--G)':'var(--R)';
-    html+='<div style="background:rgba(61,158,255,.05);border:1px solid rgba(61,158,255,.2);border-radius:10px;padding:12px;margin-bottom:12px;text-align:center">';
-    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:var(--B)">2/3 Motor Hemfikir: <b style="color:'+t2C+'">'+t2Dir+'</b></div>';
-    html+='</div>';
+  // 7. 1H TREND (EMA200)
+  var trendStatus='neutral', trendDir=null, trendDetail='', trendVal='--';
+  if(ana&&p){
+    if(p>ana.ema200&&ana.ema20>ana.ema50){ trendStatus='good'; trendDir='LONG'; trendVal='YUKARI'; trendDetail='Fiyat EMA200 üstü · EMA20>50'; }
+    else if(p<ana.ema200&&ana.ema20<ana.ema50){ trendStatus='good'; trendDir='SHORT'; trendVal='AŞAĞI'; trendDetail='Fiyat EMA200 altı · EMA20<50'; }
+    else if(p>ana.ema200){ trendStatus='warn'; trendDir='LONG'; trendVal='HAFIF YUKARI'; trendDetail='EMA200 üstü ama karışık'; }
+    else { trendStatus='warn'; trendDir='SHORT'; trendVal='HAFIF AŞAĞI'; trendDetail='EMA200 altı ama karışık'; }
+  } else { trendVal='Hesaplanıyor...'; }
+  kriterler.push({label:'1H Trend',val:trendVal,status:trendStatus,dir:trendDir,detail:trendDetail,icon:'📈'});
+
+  // 8. ATR + SEANS
+  var atrStatus='neutral', atrDetail='', atrVal='--';
+  if(atrV>0){
+    atrVal='$'+Math.round(atrV);
+    var atrPct=atrV/p*100;
+    if(atrPct>=0.4&&seansOk){ atrStatus='good'; atrDetail=seans+' seansı · Hareketli piyasa'; }
+    else if(atrPct>=0.25){ atrStatus='warn'; atrDetail=seans+' · Orta hareket · ATR %'+atrPct.toFixed(2); }
+    else { atrStatus='bad'; atrDetail='ATR çok düşük → TP\'ye ulaşmaz'; }
+  }
+  kriterler.push({label:'ATR/Seans',val:atrVal,status:atrStatus,dir:null,detail:atrDetail,icon:'🕒'});
+
+  // ── GENEL KARAR ──
+  var goodCount=kriterler.filter(function(k){return k.status==='good';}).length;
+  var badCount=kriterler.filter(function(k){return k.status==='bad';}).length;
+  var longVotes=kriterler.filter(function(k){return k.dir==='LONG';}).length;
+  var shortVotes=kriterler.filter(function(k){return k.dir==='SHORT';}).length;
+
+  var karar='BEKLE', kararC='var(--Y)', kararBg='rgba(251,191,36,.06)', kararBd='rgba(251,191,36,.3)';
+  var kararDetail='';
+  if(goodCount>=5&&badCount===0&&longVotes>=5&&confirmed==='LONG'){
+    karar='LONG GİR'; kararC='var(--G)'; kararBg='rgba(0,217,126,.08)'; kararBd='rgba(0,217,126,.4)';
+    kararDetail='✅ '+goodCount+'/8 kriter uygun · Güçlü LONG sinyali';
+  } else if(goodCount>=5&&badCount===0&&shortVotes>=5&&confirmed==='SHORT'){
+    karar='SHORT GİR'; kararC='var(--R)'; kararBg='rgba(255,59,92,.08)'; kararBd='rgba(255,59,92,.4)';
+    kararDetail='✅ '+goodCount+'/8 kriter uygun · Güçlü SHORT sinyali';
+  } else if(goodCount>=4&&badCount<=1&&longVotes>shortVotes&&confirmed==='LONG'){
+    karar='LONG DÜŞÜNEBİLİRSİN'; kararC='var(--G)'; kararBg='rgba(0,217,126,.04)'; kararBd='rgba(0,217,126,.25)';
+    kararDetail='⚠ '+goodCount+'/8 kriter uygun · Dikkatli gir';
+  } else if(goodCount>=4&&badCount<=1&&shortVotes>longVotes&&confirmed==='SHORT'){
+    karar='SHORT DÜŞÜNEBİLİRSİN'; kararC='var(--R)'; kararBg='rgba(255,59,92,.04)'; kararBd='rgba(255,59,92,.25)';
+    kararDetail='⚠ '+goodCount+'/8 kriter uygun · Dikkatli gir';
+  } else if(badCount>=3){
+    karar='RİSKLİ'; kararC='var(--R)'; kararBg='rgba(255,59,92,.05)'; kararBd='rgba(255,59,92,.2)';
+    kararDetail='❌ '+badCount+' kriter olumsuz · Girme';
+  } else {
+    karar='BEKLE'; kararDetail='Kriterler henüz yeterli değil · '+goodCount+'/8 uygun';
   }
 
-  // ─ DETAY TABLOLARI ─
-  html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+  // ── HTML RENDER ──
+  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:2px;color:var(--t2);margin-bottom:10px">🎯 KARAR MERKEZİ · 8 KRİTER · '+new Date().toLocaleTimeString('tr-TR')+'</div>';
 
-  // Scalp faktörleri özeti
-  html+='<div style="background:var(--s1);border:1px solid var(--dim2);border-radius:10px;padding:14px">';
-  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--B);margin-bottom:8px">⚡ SCALP FAKTÖRLER</div>';
-  if(sc&&sc.factors.length){
-    sc.factors.filter(function(f){return f.w>0;}).slice(0,6).forEach(function(f){
-      var fc=f.dir==='LONG'?'var(--G)':f.dir==='SHORT'?'var(--R)':'var(--t2)';
-      html+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--dim2)">';
-      html+='<span style="font-size:10px;color:var(--t2)">'+f.name+'</span>';
-      html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;font-weight:700;color:'+fc+'">'+(f.dir==='LONG'?'▲':f.dir==='SHORT'?'▼':'━')+' '+f.w+'p</span>';
-      html+='</div>';
-    });
-  } else { html+='<div style="font-size:10px;color:var(--t2)">Veri yükleniyor...</div>'; }
+  // BÜYÜK KARAR KARTI
+  html+='<div style="background:'+kararBg+';border:2px solid '+kararBd+';border-radius:16px;padding:20px;margin-bottom:14px;text-align:center;position:relative;overflow:hidden">';
+  html+='<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,'+kararC+',transparent)"></div>';
+  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:3px;color:var(--t2);margin-bottom:8px">GENEL KARAR</div>';
+  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:36px;font-weight:700;color:'+kararC+';line-height:1.1;margin-bottom:8px">'+karar+'</div>';
+  html+='<div style="font-size:11px;color:var(--t2)">'+kararDetail+'</div>';
+  // TP/SL - eğer sinyal varsa göster
+  if((karar.includes('LONG')||karar.includes('SHORT'))&&sc&&sc.tp){
+    var kDir=karar.includes('LONG')?'LONG':'SHORT';
+    var kTp=sc.tp, kSl=sc.sl, kRr=sc.rr;
+    html+='<div style="display:flex;justify-content:center;gap:16px;margin-top:12px;flex-wrap:wrap">';
+    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px"><span style="color:var(--t2)">GİRİŞ: </span><b style="color:var(--O)">$'+Math.round(p).toLocaleString('tr-TR')+'</b></div>';
+    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px"><span style="color:var(--t2)">TP: </span><b style="color:var(--G)">$'+Math.round(kTp).toLocaleString('tr-TR')+'</b></div>';
+    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px"><span style="color:var(--t2)">SL: </span><b style="color:var(--R)">$'+Math.round(kSl).toLocaleString('tr-TR')+'</b></div>';
+    if(kRr) html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px"><span style="color:var(--t2)">R/R: </span><b style="color:var(--P)">'+kRr+'x</b></div>';
+    html+='</div>';
+  }
   html+='</div>';
 
-  // Ana sinyal katman özeti
-  html+='<div style="background:var(--s1);border:1px solid var(--dim2);border-radius:10px;padding:14px">';
-  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--B);margin-bottom:8px">◆ ANA SİNYAL KATMANLAR</div>';
-  if(ana){
-    [['L1 Makro',ana.layer1],['L2 Momentum',ana.layer2],['L3 Tetikleyici',ana.layer3]].forEach(function(x){
-      var lName=x[0], lData=x[1];
-      if(!lData) return;
-      var lc=lData.dir==='LONG'?'var(--G)':lData.dir==='SHORT'?'var(--R)':'var(--t2)';
-      html+='<div style="margin-bottom:6px">';
-      html+='<div style="display:flex;justify-content:space-between;margin-bottom:2px">';
-      html+='<span style="font-size:10px;color:var(--t2)">'+lName+'</span>';
-      html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;font-weight:700;color:'+lc+'">'+lData.dir+' %'+lData.score+'</span>';
-      html+='</div>';
-      html+='<div style="height:3px;background:var(--dim2);border-radius:2px;overflow:hidden">';
-      html+='<div style="height:100%;width:'+lData.score+'%;background:'+lc+';border-radius:2px"></div>';
-      html+='</div></div>';
-    });
-  } else { html+='<div style="font-size:10px;color:var(--t2)">1H veri yükleniyor...</div>'; }
+  // 8 KRİTER GRID
+  html+='<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px">';
+  kriterler.forEach(function(k){
+    var kc=k.status==='good'?'var(--G)':k.status==='warn'?'var(--Y)':k.status==='bad'?'var(--R)':'var(--t2)';
+    var kbg=k.status==='good'?'rgba(0,217,126,.05)':k.status==='warn'?'rgba(251,191,36,.04)':k.status==='bad'?'rgba(255,59,92,.05)':'var(--s2)';
+    var kbd=k.status==='good'?'rgba(0,217,126,.2)':k.status==='warn'?'rgba(251,191,36,.15)':k.status==='bad'?'rgba(255,59,92,.2)':'var(--dim2)';
+    var dot=k.status==='good'?'●':k.status==='warn'?'◐':k.status==='bad'?'○':'━';
+    html+='<div style="background:'+kbg+';border:1px solid '+kbd+';border-radius:10px;padding:10px 12px">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">';
+    html+='<span style="font-size:10px;color:var(--t2)">'+k.icon+' '+k.label+'</span>';
+    html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:8px;color:'+kc+'">'+dot+'</span>';
+    html+='</div>';
+    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:'+kc+'">'+k.val+'</div>';
+    html+='<div style="font-size:9px;color:var(--t2);margin-top:2px">'+k.detail+'</div>';
+    if(k.dir) html+='<div style="font-size:8px;font-weight:700;color:'+kc+';margin-top:3px">→ '+k.dir+'</div>';
+    html+='</div>';
+  });
   html+='</div>';
 
-  html+='</div>'; // grid kapanış
+  // ── ÇOKLU TF ÖZET ──
+  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:2px;color:var(--B);margin-bottom:8px">📊 ÇOKLU ZAMAN DİLİMİ ÖZETİ</div>';
+  html+='<div style="background:var(--s1);border:1px solid var(--dim2);border-radius:10px;overflow:hidden;margin-bottom:12px">';
+  var tfs=[
+    {tf:'15m',cl:S.c15m,hi:S.h15m,lo:S.l15m},
+    {tf:'1H', cl:S.c1h, hi:S.h1h, lo:S.l1h},
+    {tf:'4H', cl:S.c4h, hi:S.h4h, lo:S.l4h},
+    {tf:'1D', cl:S.c1d, hi:S.h1d, lo:S.l1d}
+  ];
+  html+='<div style="display:grid;grid-template-columns:repeat(4,1fr)">';
+  tfs.forEach(function(t){
+    if(!t.cl||t.cl.length<20){ 
+      html+='<div style="padding:10px;text-align:center;border-right:1px solid var(--dim2)"><div style="font-size:9px;color:var(--t2)">'+t.tf+'</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--dim)">--</div></div>';
+      return; 
+    }
+    var tfRes=v9Signal(t.cl,t.hi,t.hi,null);
+    var tfC=tfRes.sig==='LONG'?'var(--G)':tfRes.sig==='SHORT'?'var(--R)':'var(--Y)';
+    var tfIco=tfRes.sig==='LONG'?'▲':tfRes.sig==='SHORT'?'▼':'━';
+    html+='<div style="padding:10px;text-align:center;border-right:1px solid var(--dim2)">';
+    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--t2);margin-bottom:4px">'+t.tf+'</div>';
+    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:14px;font-weight:700;color:'+tfC+'">'+tfIco+' '+tfRes.sig+'</div>';
+    html+='<div style="font-size:9px;color:var(--t2);margin-top:2px">%'+tfRes.confidence+'</div>';
+    html+='</div>';
+  });
+  html+='</div></div>';
+
+  // ── 3 MOTOR KARTI ──
+  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:2px;color:var(--P);margin-bottom:8px">🔮 3 MOTOR DETAYI</div>';
+  html+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">';
+  [[scSig,'⚡ SCALP','15M',sc?'%'+sc.confidence:''],[anaSig,'◆ ANA','1H',ana?'%'+ana.confidence:''],[pmSig,'★ PREMİUM','Swing',pm.metCount+'/5 koşul']].forEach(function(m){
+    var mc=m[0]==='LONG'?'var(--G)':m[0]==='SHORT'?'var(--R)':'var(--Y)';
+    var mbg=m[0]==='LONG'?'rgba(0,217,126,.05)':m[0]==='SHORT'?'rgba(255,59,92,.05)':'rgba(251,191,36,.03)';
+    html+='<div style="background:'+mbg+';border:1px solid var(--dim2);border-radius:8px;padding:10px;text-align:center">';
+    html+='<div style="font-size:8px;color:var(--t2);margin-bottom:4px">'+m[1]+' · '+m[2]+'</div>';
+    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:18px;font-weight:700;color:'+mc+'">'+m[0]+'</div>';
+    html+='<div style="font-size:9px;color:var(--t2);margin-top:3px">'+m[3]+'</div>';
+    html+='</div>';
+  });
+  html+='</div>';
+
+  // Confluence uyarısı
+  if(motorLong===3||motorShort===3){
+    var allDir=motorLong===3?'LONG':'SHORT';
+    var allC=allDir==='LONG'?'var(--G)':'var(--R)';
+    html+='<div style="background:'+(allDir==='LONG'?'rgba(0,217,126,.08)':'rgba(255,59,92,.08)')+';border:1px solid '+(allDir==='LONG'?'rgba(0,217,126,.4)':'rgba(255,59,92,.4)')+';border-radius:10px;padding:12px;text-align:center;margin-bottom:10px">';
+    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:'+allC+'">★ 3/3 MOTOR HEMFİKİR → EN GÜÇLÜ '+allDir+' SİNYALİ ★</div>';
+    html+='</div>';
+  }
 
   pp.innerHTML=html;
 }
@@ -5364,12 +5468,10 @@ async function loadAll(){
   calcNetFlowScore();
   prog(38,'Fear & Greed + Dominance...');
   await Promise.all([loadFG(),loadBTCDominance(),loadHashrate()]);
-  prog(48,'Likidasyonlar...');
-  await loadLiquidations();
-  prog(56,'15m + 30m + 1H...');
+  prog(48,'Klines yükleniyor...');
   await Promise.all([loadKlines('15m'),loadKlines('30m'),loadKlines('1H')]);
-  prog(68,'4H + 6H...');
-  await Promise.all([loadKlines('4H'),loadKlines('6H')]);
+  prog(60,'Likidasyonlar + 4H + 6H...');
+  await Promise.all([loadLiquidations(),loadKlines('4H'),loadKlines('6H')]);
   prog(80,'1D + 1W...');
   await Promise.all([loadKlines('1D'),loadKlines('1W')]);
   // VPOC hesapla
