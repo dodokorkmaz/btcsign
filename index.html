@@ -403,6 +403,8 @@ body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(r
   <div class="tc" id="tc-haber">
     <div class="sh">📊 Order Flow — Anlık Büyük Emir Takibi</div>
     <div id="ofPanel" style="margin-bottom:12px"></div>
+    <div class="sh">🗺 Likidite Haritası — Likidasyon Bölgeleri</div>
+    <div id="liqMapPanel" style="margin-bottom:12px"></div>
     <div class="sh">Bitcoin Haberleri</div>
     <div id="newsGrid"></div>
     <div class="sh">Order Book</div>
@@ -579,7 +581,7 @@ var S = {
   ob:null, obBias:0, obBidWall:null, obAskWall:null,
   cvdBull:0, cvdBear:0, cvdNet:0,
   v9Layer1:null, v9Layer2:null, v9Layer3:null,
-  liqLevels:null, liqNearLong:null, liqNearShort:null,
+  liqLevels:[], liqNearLong:null, liqNearShort:null,
   realCVD:0, cvdTrend:0, cvdDivergence:false,
   cvdHistory:[], cvdRolling30m:0,
   fibLevels:null, fibNearest:null,
@@ -2662,20 +2664,16 @@ async function loadLiquidations(){
   if(!S.price||!S.c1h||S.c1h.length<30) return;
   var pr=S.price;
   var atrE=atr(S.h1h.slice(-20),S.l1h.slice(-20),S.c1h.slice(-20));
-  // Son 72 saatin swing noktaları
   var lookback=Math.min(72,S.l1h.length);
   var swLow=Math.min.apply(null,S.l1h.slice(-lookback));
   var swHigh=Math.max.apply(null,S.h1h.slice(-lookback));
-  // L/S oranı varsa daha iyi tahmin yap
-  // Yüksek long oranı → long likidasyonları daha yakın
   var lsAdj=1.0;
   if(S.lsRatio!=null){
-    if(S.lsRatio>1.4) lsAdj=0.85;  // Çok fazla long → liki daha yakın
-    else if(S.lsRatio<0.8) lsAdj=0.85; // Çok fazla short → liki daha yakın
+    if(S.lsRatio>1.4) lsAdj=0.85;
+    else if(S.lsRatio<0.8) lsAdj=0.85;
   }
-  // Long liki bölgesi: swing low yakını veya %5 altı (20x leverage)
+  // Yakın likidasyon seviyeleri (scalp için)
   var longPx=Math.max(swLow*0.997, pr*(1-0.05*lsAdj));
-  // Short liki bölgesi: swing high yakını veya %5 üstü
   var shortPx=Math.min(swHigh*1.003, pr*(1+0.05*lsAdj));
   S.liqNearLong={
     price:longPx, size:0,
@@ -2687,6 +2685,113 @@ async function loadLiquidations(){
     sizeMStr:'swing high ~$'+Math.round(swHigh).toLocaleString('tr-TR'),
     pct:Math.abs(shortPx-pr)/pr*100, synthetic:true, source:'Hesaplama'
   };
+
+  // ══ LİKİDİTE HARİTASI — Çok Seviyeli ══
+  // Her kaldıraç için hem long hem short likidasyon bölgesi hesapla
+  // Long pozisyon: giriş fiyatının (1 - 1/kaldıraç) altında likide olur
+  // Short pozisyon: giriş fiyatının (1 + 1/kaldıraç) üstünde likide olur
+  var leverages=[
+    {lev:100, weight:1.5, label:'100x'},
+    {lev:50,  weight:2.0, label:'50x'},
+    {lev:25,  weight:2.5, label:'25x'},
+    {lev:20,  weight:3.0, label:'20x'},
+    {lev:10,  weight:4.0, label:'10x'},
+    {lev:5,   weight:3.0, label:'5x'},
+    {lev:3,   weight:2.0, label:'3x'}
+  ];
+  // L/S oranına göre yoğunluk ağırlığı
+  var longBias=S.lsRatio!=null?Math.min(S.lsRatio/1.2,2.0):1.0;
+  var shortBias=S.lsRatio!=null?Math.min(1.2/S.lsRatio,2.0):1.0;
+  // OI varsa toplam yoğunluğu ölçekle
+  var oiScale=S.oi!=null?Math.min(S.oi/5e9,3.0):1.0;
+
+  var levels=[];
+  // Her kaldıraç seviyesi için likidasyon fiyatı hesapla
+  // Birden fazla giriş noktası varsayımı: mevcut fiyat + ATR tabanlı offset'ler
+  var entryOffsets=[0, atrE*0.3, atrE*0.6, atrE*1.0, -atrE*0.3, -atrE*0.5];
+  leverages.forEach(function(lvg){
+    entryOffsets.forEach(function(offset){
+      var entryLong=pr+offset;
+      var entryShort=pr+offset;
+      // Long likidasyon: entry * (1 - 0.9/kaldıraç)
+      var liqLong=entryLong*(1-0.9/lvg.lev);
+      // Short likidasyon: entry * (1 + 0.9/kaldıraç)
+      var liqShort=entryShort*(1+0.9/lvg.lev);
+      // Sadece mevcut fiyatın %15 yakınındaki seviyeleri al
+      var rangePct=0.15;
+      if(Math.abs(liqLong-pr)/pr<=rangePct){
+        levels.push({
+          price:liqLong,
+          side:'LONG',
+          leverage:lvg.lev,
+          label:lvg.label,
+          density:lvg.weight*longBias*oiScale*(1-Math.abs(liqLong-pr)/pr/rangePct),
+          pct:((liqLong-pr)/pr*100)
+        });
+      }
+      if(Math.abs(liqShort-pr)/pr<=rangePct){
+        levels.push({
+          price:liqShort,
+          side:'SHORT',
+          leverage:lvg.lev,
+          label:lvg.label,
+          density:lvg.weight*shortBias*oiScale*(1-Math.abs(liqShort-pr)/pr/rangePct),
+          pct:((liqShort-pr)/pr*100)
+        });
+      }
+    });
+  });
+
+  // Swing high/low noktalarında ek yoğunluk (gerçek birikiş noktaları)
+  // Son 72 saatin tüm yerel high/low'larını bul
+  var swingLevels=[];
+  var sw=S.l1h.slice(-lookback);
+  var sh=S.h1h.slice(-lookback);
+  for(var si=2;si<sw.length-2;si++){
+    // Yerel dip
+    if(sw[si]<sw[si-1]&&sw[si]<sw[si-2]&&sw[si]<sw[si+1]&&sw[si]<sw[si+2]){
+      var spx=sw[si];
+      if(Math.abs(spx-pr)/pr<=0.15){
+        swingLevels.push({price:spx,side:'LONG',density:5.0,label:'Swing Low',pct:(spx-pr)/pr*100});
+      }
+    }
+    // Yerel tepe
+    if(sh[si]>sh[si-1]&&sh[si]>sh[si-2]&&sh[si]>sh[si+1]&&sh[si]>sh[si+2]){
+      var spx2=sh[si];
+      if(Math.abs(spx2-pr)/pr<=0.15){
+        swingLevels.push({price:spx2,side:'SHORT',density:5.0,label:'Swing High',pct:(spx2-pr)/pr*100});
+      }
+    }
+  }
+  levels=levels.concat(swingLevels);
+
+  // Yakın fiyat bölgelerini birleştir (clustering — $200 aralığındakiler)
+  var clustered=[];
+  var used=new Array(levels.length).fill(false);
+  for(var i=0;i<levels.length;i++){
+    if(used[i]) continue;
+    var group=[levels[i]];
+    used[i]=true;
+    for(var j=i+1;j<levels.length;j++){
+      if(!used[j]&&Math.abs(levels[j].price-levels[i].price)<200&&levels[j].side===levels[i].side){
+        group.push(levels[j]);
+        used[j]=true;
+      }
+    }
+    var avgPrice=group.reduce(function(a,b){return a+b.price;},0)/group.length;
+    var totalDensity=group.reduce(function(a,b){return a+b.density;},0);
+    clustered.push({
+      price:avgPrice,
+      side:group[0].side,
+      density:totalDensity,
+      label:group.map(function(x){return x.label;}).filter(function(v,i,a){return a.indexOf(v)===i;}).join(', '),
+      pct:(avgPrice-pr)/pr*100
+    });
+  }
+
+  // Yoğunluğa göre sırala
+  clustered.sort(function(a,b){return b.density-a.density;});
+  S.liqLevels=clustered.slice(0,20); // En yoğun 20 seviye
 }
 
 // ═══ V12 — GERÇEK CVD (Binance aggTrades) ═══
@@ -2899,6 +3004,111 @@ async function loadOrderBook(){
   S.obBias=bias; S.obBidWall=bidWall; S.obAskWall=askWall; S.cvdBull=cvdB; S.cvdBear=cvdBr; S.cvdNet=cvdB-cvdBr;
 }
 
+function renLiqMap(){
+  var pp=document.getElementById('liqMapPanel'); if(!pp) return;
+  var p=S.price;
+  if(!p||!S.liqLevels||!S.liqLevels.length){
+    pp.innerHTML='<div style="text-align:center;padding:20px;font-size:10px;color:var(--t2)">Likidasyon verisi hesaplanıyor... (1H klines gerekli)</div>';
+    return;
+  }
+  var levels=S.liqLevels;
+  // Fiyat aralığı: mevcut fiyatın ±12%
+  var rangePct=0.12;
+  var pMin=p*(1-rangePct), pMax=p*(1+rangePct);
+  // Sadece bu aralıktakileri al
+  var visible=levels.filter(function(l){return l.price>=pMin&&l.price<=pMax;});
+  visible.sort(function(a,b){return b.price-a.price;}); // Yüksekten alçağa
+  // Maksimum yoğunluk (normalize için)
+  var maxDen=Math.max.apply(null,visible.map(function(l){return l.density;}));
+  if(maxDen===0) maxDen=1;
+
+  var html='';
+  html+='<div style="background:var(--s1);border:1px solid var(--dim2);border-radius:12px;padding:16px;margin-bottom:10px">';
+  html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">';
+  html+='<div>';
+  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:2px;color:var(--t2)">🗺 LİKİDİTE HARİTASI · ±12% · BTCUSDT</div>';
+  html+='<div style="font-size:9px;color:var(--t2);margin-top:3px">Kaldıraç seviyelerine göre tahmin · Swing noktaları dahil</div>';
+  html+='</div>';
+  html+='<div style="text-align:right">';
+  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--O)">$'+Math.round(p).toLocaleString('tr-TR')+'</div>';
+  html+='<div style="font-size:9px;color:var(--t2)">Mevcut fiyat</div>';
+  html+='</div></div>';
+
+  // SVG Harita
+  var W=500, H=320, padL=70, padR=20, padT=20, padB=20;
+  var chartH=H-padT-padB, chartW=W-padL-padR;
+  html+='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;border-radius:8px;background:var(--s2)">';
+
+  // Arka plan grid çizgileri
+  for(var gi=0;gi<=4;gi++){
+    var gx=padL+gi*(chartW/4);
+    html+='<line x1="'+gx+'" y1="'+padT+'" x2="'+gx+'" y2="'+(H-padB)+'" stroke="rgba(255,255,255,.04)" stroke-width="1"/>';
+  }
+
+  // Mevcut fiyat çizgisi (ortaya denk gelecek şekilde)
+  var prY=padT+(pMax-p)/(pMax-pMin)*chartH;
+  html+='<line x1="'+padL+'" y1="'+prY.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+prY.toFixed(1)+'" stroke="rgba(247,147,26,.6)" stroke-width="1.5" stroke-dasharray="4,3"/>';
+  html+='<text x="'+(padL-4)+'" y="'+(prY+4).toFixed(1)+'" text-anchor="end" font-family="monospace" font-size="9" fill="rgba(247,147,26,.9)">$'+Math.round(p/1000)+'K</text>';
+
+  // Likidasyon barları
+  visible.forEach(function(lvl){
+    var y=padT+(pMax-lvl.price)/(pMax-pMin)*chartH;
+    var barW=Math.max(4,Math.round(lvl.density/maxDen*chartW*0.85));
+    var color=lvl.side==='LONG'?'rgba(0,217,126,':'rgba(255,59,92,';
+    var alpha=0.2+0.6*(lvl.density/maxDen);
+    // Bar
+    html+='<rect x="'+padL+'" y="'+(y-3).toFixed(1)+'" width="'+barW+'" height="6" rx="2" fill="'+color+alpha+')" />';
+    // Fiyat etiketi
+    html+='<text x="'+(padL-4)+'" y="'+(y+3).toFixed(1)+'" text-anchor="end" font-family="monospace" font-size="8" fill="rgba(139,168,204,.7)">'+Math.round(lvl.price/1000)+'K</text>';
+    // Yoğunluk yüzdesi
+    var denPct=Math.round(lvl.density/maxDen*100);
+    if(denPct>30){
+      html+='<text x="'+(padL+barW+4)+'" y="'+(y+3).toFixed(1)+'" font-family="monospace" font-size="8" fill="'+color+'0.8)">%'+denPct+'</text>';
+    }
+  });
+
+  // Mevcut fiyat marker
+  html+='<polygon points="'+padL+','+(prY-5).toFixed(1)+' '+(padL-8)+','+(prY).toFixed(1)+' '+padL+','+(prY+5).toFixed(1)+'" fill="var(--O)"/>';
+
+  html+='</svg>';
+
+  // Özet tablo — en güçlü 6 seviye
+  var top6=visible.slice().sort(function(a,b){return b.density-a.density;}).slice(0,6);
+  if(top6.length>0){
+    html+='<div style="margin-top:12px">';
+    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--t2);margin-bottom:6px">EN YOĞUN SEVİYELER</div>';
+    html+='<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px">';
+    top6.forEach(function(lvl){
+      var lc=lvl.side==='LONG'?'var(--G)':'var(--R)';
+      var lbg=lvl.side==='LONG'?'rgba(0,217,126,.06)':'rgba(255,59,92,.06)';
+      var lbd=lvl.side==='LONG'?'rgba(0,217,126,.2)':'rgba(255,59,92,.2)';
+      var denPct=Math.round(lvl.density/maxDen*100);
+      var distPct=Math.abs(lvl.pct).toFixed(1);
+      var dir=lvl.pct>0?'▲ +':'▼ ';
+      html+='<div style="background:'+lbg+';border:1px solid '+lbd+';border-radius:7px;padding:8px 10px">';
+      html+='<div style="display:flex;justify-content:space-between;margin-bottom:3px">';
+      html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;font-weight:700;color:'+lc+'">$'+Math.round(lvl.price).toLocaleString('tr-TR')+'</span>';
+      html+='<span style="font-size:9px;color:'+lc+'">'+lvl.side+'</span>';
+      html+='</div>';
+      html+='<div style="font-size:9px;color:var(--t2)">'+dir+distPct+'% uzakta · Yoğunluk %'+denPct+'</div>';
+      html+='<div style="font-size:8px;color:var(--t2);margin-top:2px">'+lvl.label+'</div>';
+      // Mini yoğunluk bar
+      html+='<div style="height:3px;background:var(--dim2);border-radius:2px;margin-top:4px;overflow:hidden">';
+      html+='<div style="height:100%;width:'+denPct+'%;background:'+lc+';border-radius:2px"></div></div>';
+      html+='</div>';
+    });
+    html+='</div></div>';
+  }
+
+  // Uyarı notu
+  html+='<div style="margin-top:10px;padding:8px 10px;background:rgba(61,158,255,.04);border:1px solid rgba(61,158,255,.1);border-radius:6px;font-size:9px;color:var(--t2);line-height:1.6">';
+  html+='<b style="color:var(--B)">Nasıl Kullanılır:</b> Yeşil barlar = long likidasyon bölgeleri (fiyat düşerse buradaki longlar likide olur, dönüş noktası). Kırmızı barlar = short likidasyon bölgeleri (fiyat yükselirse shortlar likide olur, direnç noktası). ';
+  html+='<b style="color:var(--Y)">En yoğun bölgeler fiyatı mıknatıs gibi çeker.</b> Tahmine dayalı, kesin değil.';
+  html+='</div>';
+  html+='</div>';
+  pp.innerHTML=html;
+}
+
 function renOrderFlow(){
   var pp=document.getElementById('ofPanel'); if(!pp) return;
   var ofS=calcOrderFlowScore();
@@ -2970,7 +3180,7 @@ function renOrderFlow(){
   pp.innerHTML=html;
 }
 
-function renHaber(){ renOrderFlow(); renNewsGrid(); renOrderBook2(); }
+function renHaber(){ renOrderFlow(); renLiqMap(); renNewsGrid(); renOrderBook2(); }
 function renOrderBook2(){
   var og=document.getElementById('obGrid'); if(!og) return;
   if(!S.ob){ og.innerHTML='<div style="font-size:11px;color:var(--t2);padding:14px">Order book yükleniyor...</div>'; return; }
@@ -4985,7 +5195,7 @@ function renderAll(){
   var turevTc=document.getElementById('tc-turev');
   if(turevTc&&turevTc.classList.contains('on')) renTurev();
   var haberTc=document.getElementById('tc-haber');
-  if(haberTc&&haberTc.classList.contains('on')) renOrderFlow();
+  if(haberTc&&haberTc.classList.contains('on')){ renOrderFlow(); renLiqMap(); }
 }
 // ════════════════════════════════════════════
 // ◈ SİNYAL MERKEZİ — 3 Motor Tek Ekranda
