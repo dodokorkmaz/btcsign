@@ -2307,8 +2307,8 @@ function renTurev(){
       {lbl:'Fonlama Oranı',val:fund!=null?(fund*100).toFixed(4)+'%':'--',note:fundNote,color:fundColor},
       {lbl:'Futures/Spot Hacim',val:S.futSpotRatio!=null?S.futSpotRatio.toFixed(1)+'x':'--',note:S.futSpotRatio!=null?(S.futSpotRatio>5?'Aşırı kaldıraç':S.futSpotRatio<2?'Düşük kaldıraç':'Normal'):'',color:S.futSpotRatio!=null?(S.futSpotRatio>5?'var(--R)':S.futSpotRatio<2?'var(--G)':'var(--Y)'):'var(--t2)'},
       {lbl:'BTC Dominance',val:S.btcDominance?'%'+S.btcDominance.toFixed(1):'--',
-        note:(S.btcDomHistory.length>=1?(S.btcDominance>S.btcDomHistory[S.btcDomHistory.length-1].val?'↑ Artıyor — BTC güçlü':'↓ Düşüyor — Altcoin sezon'):'Altcoin sezonu referansı'),
-        color:S.btcDominance?(S.btcDomHistory.length>=1&&S.btcDominance>S.btcDomHistory[S.btcDomHistory.length-1].val?'var(--G)':'var(--Y)'):'var(--t2)'},
+        note:(S.btcDomHistory&&S.btcDomHistory.length>=1?(S.btcDominance>S.btcDomHistory[S.btcDomHistory.length-1].val?'↑ Artıyor — BTC güçlü':'↓ Düşüyor — Altcoin sezon'):'Altcoin sezonu referansı'),
+        color:S.btcDominance?(S.btcDomHistory&&S.btcDomHistory.length>=1&&S.btcDominance>S.btcDomHistory[S.btcDomHistory.length-1].val?'var(--G)':'var(--Y)'):'var(--t2)'},
       {lbl:'Stablecoin Dom.',val:S.stableDom?'%'+S.stableDom.toFixed(2):'--',
         note:S.stableDom?(S.stableDom>12?'Yüksek — Alım gücü kenarda':S.stableDom<7?'Düşük — Para piyasada':'Normal'):'USDT+USDC toplam',
         color:S.stableDom?(S.stableDom>12?'var(--G)':S.stableDom<7?'var(--R)':'var(--Y)'):'var(--t2)'},
@@ -5306,9 +5306,13 @@ function renMerkez(){
   var buf=S.scalpConfirmBuf||[];
   var bufLong=buf.filter(function(s){return s==='LONG';}).length;
   var bufShort=buf.filter(function(s){return s==='SHORT';}).length;
-  if(confirmed==='LONG'){ teyitStatus='good'; teyitDir='LONG'; teyitVal='TEYİT: LONG'; teyitDetail=bufLong+'/3 teyit · Giriş hazır'; }
+  var scChop=sc&&sc.isChop;
+  var scSoftChop=sc&&sc.softChop;
+  if(scChop){ teyitStatus='bad'; teyitVal='⚡ CHOP'; teyitDetail='Yatay piyasa — sinyal bloke · ADX '+(sc.adxVal?sc.adxVal.toFixed(0):'--'); }
+  else if(scSoftChop){ teyitStatus='warn'; teyitVal='YUMUŞAK CHOP'; teyitDetail='Eşik 7p · ADX '+(sc.adxVal?sc.adxVal.toFixed(0):'--'); }
+  else if(confirmed==='LONG'){ teyitStatus='good'; teyitDir='LONG'; teyitVal='TEYİT: LONG'; teyitDetail=bufLong+'/3 teyit · Giriş hazır'; }
   else if(confirmed==='SHORT'){ teyitStatus='good'; teyitDir='SHORT'; teyitVal='TEYİT: SHORT'; teyitDetail=bufShort+'/3 teyit · Giriş hazır'; }
-  else if(bufLong>=1||bufShort>=1){ teyitStatus='warn'; teyitVal='BEKLİYOR '+Math.max(bufLong,bufShort)+'/3'; teyitDetail='Teyit için '+( bufLong>=1?'LONG':'SHORT')+' bekleniyor'; }
+  else if(bufLong>=1||bufShort>=1){ teyitStatus='warn'; teyitVal='BEKLİYOR '+Math.max(bufLong,bufShort)+'/3'; teyitDetail='Teyit için '+(bufLong>=1?'LONG':'SHORT')+' bekleniyor'; }
   else { teyitStatus='bad'; teyitVal='TEYİT YOK'; teyitDetail='Sinyal bekleniyor'; }
   kriterler.push({label:'Scalp Teyit',val:teyitVal,status:teyitStatus,dir:teyitDir,detail:teyitDetail,icon:'✅'});
 
@@ -5416,7 +5420,7 @@ function renMerkez(){
       html+='<div style="padding:10px;text-align:center;border-right:1px solid var(--dim2)"><div style="font-size:9px;color:var(--t2)">'+t.tf+'</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--dim)">--</div></div>';
       return; 
     }
-    var tfRes=v9Signal(t.cl,t.hi,t.hi,null);
+    var tfRes=v9Signal(t.cl,t.hi,t.lo,null);
     var tfC=tfRes.sig==='LONG'?'var(--G)':tfRes.sig==='SHORT'?'var(--R)':'var(--Y)';
     var tfIco=tfRes.sig==='LONG'?'▲':tfRes.sig==='SHORT'?'▼':'━';
     html+='<div style="padding:10px;text-align:center;border-right:1px solid var(--dim2)">';
@@ -5501,6 +5505,41 @@ function scalpSignal(){
   var cl=S.c15m, hi=S.h15m||cl, lo=S.l15m||cl, vols=S.v15m||[];
   var n=cl.length, last=cl[n-1], prev=cl[n-2]||last;
   var atr15=atr(hi.slice(-14),lo.slice(-14),cl.slice(-14));
+
+  // ══ CHOP FİLTRESİ — 3 katmanlı yatay piyasa tespiti ══
+  var chopReasons=[];
+  var isChop=false;
+
+  // 1. ADX Filtresi — trend gücü ölçümü
+  // ADX < 20 = trendsiz piyasa = chop
+  var adx15=adx(hi.slice(-20),lo.slice(-20),cl.slice(-20),14);
+  var adxVal=adx15?adx15.adx:25;
+  if(adxVal<20) chopReasons.push('ADX '+adxVal.toFixed(0)+' < 20');
+
+  // 2. BB Genişlik Filtresi — sıkışma tespiti
+  // BW < %1.5 = bantlar çok dar = kırılım bekleniyor ama yön belli değil
+  var bb15=bollinger(cl.slice(-20),20);
+  var bwVal=bb15?bb15.bw*100:3;
+  if(bb15&&bwVal<1.5) chopReasons.push('BB BW %'+bwVal.toFixed(1)+' < 1.5');
+
+  // 3. ATR Filtresi — hareketsiz piyasa
+  // 15m ATR, son 20 mumun ortalamasının %50'sinden düşükse = ölü piyasa
+  var atrAvg=0;
+  if(cl.length>=20){
+    var atrVals=[];
+    for(var ai=Math.max(1,cl.length-20);ai<cl.length;ai++){
+      var atrH=hi[ai]||last, atrL=lo[ai]||last, atrC=cl[ai-1]||last;
+      atrVals.push(Math.max(atrH-atrL,Math.abs(atrH-atrC),Math.abs(atrL-atrC)));
+    }
+    atrAvg=atrVals.reduce(function(a,b){return a+b;},0)/atrVals.length;
+    if(atr15<atrAvg*0.5) chopReasons.push('ATR düşük ($'+Math.round(atr15)+'<$'+Math.round(atrAvg*0.5)+')');
+  }
+
+  // En az 2 chop sinyali varsa = kesinlikle chop
+  // Sadece ADX<20 varsa = hafif chop uyarısı (sinyal üret ama eşiği yükselt)
+  var hardChop=chopReasons.length>=2;
+  var softChop=chopReasons.length===1&&adxVal<20;
+  isChop=hardChop;
 
   var factors=[], bull=0, bear=0;
 
@@ -5676,13 +5715,38 @@ function scalpSignal(){
     else if(p<e.e200&&e.e20<e.e50) trend1h=-1;
   }
 
+  // ── 4H TREND FİLTRESİ — Gün içi için ana trend ──
+  // 15dk-2saat pozisyon için 4H trendin yönü kritik
+  var trend4h=0;
+  if(S.c4h&&S.c4h.length>=20&&S.ema['4H']){
+    var e4=S.ema['4H'];
+    if(p>e4.e200&&e4.e20>e4.e50) trend4h=1;
+    else if(p<e4.e200&&e4.e20<e4.e50) trend4h=-1;
+    else if(p>e4.e50) trend4h=1;  // EMA200 yok ama EMA50 üstü
+    else if(p<e4.e50) trend4h=-1;
+  }
+  // 4H ve 1H çelişiyorsa ek dikkat
+  var trendConflict=(trend1h!==0&&trend4h!==0&&trend1h!==trend4h);
+
   // ── KARAR — V13 GÜÇLENDİRİLMİŞ ──
-  // Kural 1: Min 5 puan
-  // Kural 2: 3 ana faktörden en az 1'i aynı yönde olmalı
-  //   Ana faktörler: CVD (faktör 1), Likidasyon (faktör 2), L/S Ratio (faktör 3)
-  // Kural 3: Karşı yön puanı çok yüksekse bekle
   var minThresh=5;
   var sig='BEKLE';
+
+  // HARD CHOP — kesin yatay piyasa → sinyal üretme
+  if(hardChop){
+    return {
+      sig:'BEKLE', bull:bull, bear:bear, activeScore:0,
+      confidence:20, factors:factors, atr:atr15,
+      tp:null, sl:null, rr:null, isDead:false, durEst:'--',
+      tpMult:1, slMult:1, trend1h:trend1h,
+      isContraTrend:false, vwap:vwap15, cp:cp15, rsi15:rsi15,
+      minThresh:minThresh, coreLong:0, coreShort:0,
+      isChop:true, chopReasons:chopReasons, adxVal:adxVal, bwVal:bwVal
+    };
+  }
+
+  // SOFT CHOP — hafif yatay, eşiği yükselt
+  if(softChop) minThresh=7;
 
   // 3 ana faktörü kontrol et
   var coreFactors=factors.filter(function(f){
@@ -5690,10 +5754,8 @@ function scalpSignal(){
   });
   var coreLong=coreFactors.filter(function(f){return f.dir==='LONG'&&f.w>0;}).length;
   var coreShort=coreFactors.filter(function(f){return f.dir==='SHORT'&&f.w>0;}).length;
-  var hasCoreSupport=(sig==='LONG'?coreLong>=1:coreShort>=1);
 
   if(bull>=minThresh&&bull>bear*1.2){
-    // Güçlü bir faktörden destek var mı?
     var hasCoreLong=coreFactors.some(function(f){return f.dir==='LONG'&&f.w>0;});
     if(hasCoreLong||bull>=8) sig='LONG';
   } else if(bear>=minThresh&&bear>bull*1.2){
@@ -5702,15 +5764,15 @@ function scalpSignal(){
   }
 
   var isContraTrend=(sig==='LONG'&&trend1h===-1)||(sig==='SHORT'&&trend1h===1);
-  // Kontr-trend sinyallerde eşiği yükselt
   if(isContraTrend&&sig!=='BEKLE'){
-    if(bull<7&&bear<7) sig='BEKLE'; // Kontr-trend için 7+ puan lazım
+    if(bull<7&&bear<7) sig='BEKLE';
   }
+  // 4H trende kesin karşıysa ve puan düşükse engelle
+  var isContra4h=(sig==='LONG'&&trend4h===-1)||(sig==='SHORT'&&trend4h===1);
+  if(isContra4h&&sig!=='BEKLE'&&Math.max(bull,bear)<9) sig='BEKLE';
 
-  // Seans
   var utcH=new Date().getUTCHours();
   var isDead=(utcH>=2&&utcH<6);
-  // Dead zone'da sinyal eşiğini yükselt
   if(isDead&&sig!=='BEKLE'&&Math.max(bull,bear)<8) sig='BEKLE';
 
   // ── DİNAMİK TP/SL — ATR genişletildi, whipsaw azaltıldı ──
@@ -5742,7 +5804,9 @@ function scalpSignal(){
     tp:tp, sl:sl, rr:rr, isDead:isDead, durEst:durEst,
     tpMult:tpMult, slMult:slMult, trend1h:trend1h,
     isContraTrend:isContraTrend, vwap:vwap15, cp:cp15, rsi15:rsi15,
-    minThresh:minThresh, coreLong:coreLong, coreShort:coreShort
+    minThresh:minThresh, coreLong:coreLong, coreShort:coreShort,
+    isChop:isChop, chopReasons:chopReasons, adxVal:adxVal, bwVal:bwVal,
+    softChop:softChop, trend4h:trend4h, trendConflict:trendConflict
   };
 }
 
@@ -5790,20 +5854,30 @@ function scalpSimOpen(dir,entry,tp,sl){
 
 function scalpSimClose(pos,closePrice,reason){
   var s=S.scalpSim;
-  var pnl=pos.side==='LONG'?(closePrice-pos.entry)/pos.entry*pos.notional:(pos.entry-closePrice)/pos.entry*pos.notional;
-  var feePct=0.0004; // round-trip %0.04
+  // Slippage — gerçek piyasada market order her zaman aleyhine kayar
+  // Giriş: %0.03 aleyhine, Çıkış: %0.03 aleyhine
+  var SLIP=0.0003; // %0.03 per işlem = round-trip %0.06
+  var slippedClose=reason==='TP'?closePrice*(pos.side==='LONG'?1-SLIP:1+SLIP):
+                   reason==='STOP'||reason==='LİKİDASYON'?closePrice*(pos.side==='LONG'?1-SLIP:1+SLIP):
+                   closePrice*(pos.side==='LONG'?1-SLIP:1+SLIP);
+  var pnl=pos.side==='LONG'?(slippedClose-pos.entry)/pos.entry*pos.notional:(pos.entry-slippedClose)/pos.entry*pos.notional;
+  var feePct=0.0004; // round-trip komisyon %0.04
   var fee=pos.notional*feePct;
+  var slippageCost=pos.notional*SLIP; // Slippage maliyeti
   pnl-=fee;
+  // Slippage giriş için de düş (giriş zaten aleyhine doldu)
+  pnl-=slippageCost;
   var pnlPct=pnl/pos.size*100;
   var dur=Math.round((Date.now()-pos.openTs)/60000);
   s.balance+=pos.size+pnl;
   s.positions=s.positions.filter(function(x){return x.id!==pos.id;});
   s.trades.unshift({
-    id:pos.id, side:pos.side, entry:pos.entry, close:closePrice,
+    id:pos.id, side:pos.side, entry:pos.entry, close:slippedClose,
     pnl:parseFloat(pnl.toFixed(2)), pnlPct:parseFloat(pnlPct.toFixed(2)),
     reason:reason, duration:dur,
     openTime:pos.openTimeStr,
-    closeTime:new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'})
+    closeTime:new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'}),
+    slippage:parseFloat(slippageCost.toFixed(2))
   });
   scalpSimSave();
   var pnlStr=(pnl>=0?'+':'')+'$'+Math.abs(pnl).toFixed(2);
@@ -5826,7 +5900,12 @@ function scalpSimCheck(){
     }
   });
   toClose.forEach(function(x){scalpSimClose(x.pos,x.price,x.reason);});
-  if(toClose.length){var st=document.getElementById('tc-scalp');if(st&&st.classList.contains('on'))renScalp();}
+  // Pozisyon kapanınca min süre sayacını sıfırla — yeni giriş için hazır
+  if(toClose.length){
+    S.scalpPosOpenTs=0;
+    var st=document.getElementById('tc-scalp');
+    if(st&&st.classList.contains('on')) renScalp();
+  }
 }
 
 function scalpSimReset(){
@@ -5843,7 +5922,11 @@ function scalpSimAutoToggle(){
 
 function scalpSimManualClose(id){
   var pos=S.scalpSim.positions.find(function(x){return x.id===id;});
-  if(pos&&S.price) scalpSimClose(pos,S.price,'Manuel'); renScalp();
+  if(pos&&S.price){
+    scalpSimClose(pos,S.price,'Manuel');
+    S.scalpPosOpenTs=0; // Min süre sayacı sıfırla
+  }
+  renScalp();
 }
 
 function scalpExportCSV(){
@@ -5863,6 +5946,33 @@ function renScalp(){
   var p=S.price||0;
   var res=scalpSignal();
   if(!res){pp.innerHTML='<div style="text-align:center;padding:30px;font-size:11px;color:var(--t2)">15m veri yükleniyor...</div>';return;}
+
+  // HARD CHOP — özel panel göster
+  if(res.isChop){
+    var chopHtml='<div style="background:rgba(251,191,36,.06);border:2px solid rgba(251,191,36,.3);border-radius:14px;padding:24px;text-align:center;margin-bottom:12px">';
+    chopHtml+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:3px;color:var(--Y);margin-bottom:10px">⚡ SCALP · 15M · CHOP FİLTRESİ AKTİF</div>';
+    chopHtml+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:42px;font-weight:700;color:var(--Y);line-height:1;margin-bottom:8px">YATAY</div>';
+    chopHtml+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:13px;color:var(--Y);margin-bottom:16px">PİYASA</div>';
+    chopHtml+='<div style="font-size:11px;color:var(--t2);margin-bottom:12px">Sinyal üretimi durduruldu — yatay piyasada whipsaw riski yüksek</div>';
+    chopHtml+='<div style="display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">';
+    res.chopReasons.forEach(function(r){
+      chopHtml+='<div style="padding:5px 12px;background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);border-radius:6px;font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--Y)">'+r+'</div>';
+    });
+    chopHtml+='</div>';
+    chopHtml+='<div style="font-size:10px;color:var(--t2)">ADX: <b style="color:var(--Y)">'+res.adxVal.toFixed(1)+'</b> (20+ = trend) · BB BW: <b style="color:var(--Y)">%'+res.bwVal.toFixed(1)+'</b> (1.5%+ = hareketli)</div>';
+    chopHtml+='</div>';
+    // Simülasyon durumu da göster
+    var sc2=S.scalpSim;
+    var eq2=scalpSimEquity();
+    var totalPnl2=eq2-50000;
+    chopHtml+='<div style="background:var(--s1);border:1px solid var(--dim2);border-radius:10px;padding:12px;text-align:center">';
+    chopHtml+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--t2);margin-bottom:6px">SİMÜLASYON DURUMU</div>';
+    chopHtml+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:18px;font-weight:700;color:'+(totalPnl2>=0?'var(--G)':'var(--R)')+'">'+(totalPnl2>=0?'+':'')+'$'+totalPnl2.toFixed(0)+'</div>';
+    chopHtml+='<div style="font-size:9px;color:var(--t2)">Bakiye: $'+sc2.balance.toFixed(0)+' · '+sc2.tradeCount+' işlem</div>';
+    chopHtml+='</div>';
+    pp.innerHTML=chopHtml;
+    return;
+  }
 
   // ── V13 TEYİT MEKANİZMASI ──
   // Son 3 hesabı buffer'a ekle, 2/3 aynı yönde → teyit edildi
@@ -5949,6 +6059,12 @@ function renScalp(){
   // Kontr-trend uyarısı
   if(res.isContraTrend){
     html+='<div style="margin-top:8px;padding:6px 10px;background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);border-radius:6px;font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--Y)">⚠ KONTR TREND — 1H '+(res.trend1h===1?'YUKARI':'AŞAĞI')+' TRENDİNE KARŞI</div>';
+  }
+  if(res.softChop){
+    html+='<div style="margin-top:6px;padding:6px 10px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);border-radius:6px;font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--Y)">⚡ YUMUŞAK CHOP — Eşik 7p\'ye yükseltildi · ADX: '+res.adxVal.toFixed(0)+'</div>';
+  }
+  if(res.trendConflict){
+    html+='<div style="margin-top:6px;padding:6px 10px;background:rgba(255,59,92,.06);border:1px solid rgba(255,59,92,.2);border-radius:6px;font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--R)">⚡ TREND ÇATIŞMASI — 1H ve 4H farklı yönde · Dikkatli ol</div>';
   }
   if(res.isDead){
     html+='<div style="margin-top:6px;font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--Y)">🌙 Düşük hacim (02-06 UTC)</div>';
