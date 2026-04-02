@@ -1175,7 +1175,7 @@ function calcFundingTrend(history) {
   if(!history||history.length<3) return {sum:0, dir:0};
   var recent = history.slice(-8); // Son 8 periyot (8x8saat=64 saat)
   var sum = recent.reduce(function(a,b){return a+b;},0);
-  var dir = sum < -0.001 ? 1 : sum > 0.003 ? -1 : 0; // negatif birikim=long fırsatı
+  var dir = sum < -0.000040 ? 1 : sum > 0.000120 ? -1 : 0; // negatif birikim=long fırsatı
   return {sum:sum, dir:dir, count:recent.length};
 }
 
@@ -1273,12 +1273,12 @@ function v9Signal(cl, hi, lo, vols){
   var fund=S.funding||0;
   var fundHist=S.fundingHistory||[];
   var fundNeg=fundHist.filter(function(f){return f<0;}).length;
-  var fundPos=fundHist.filter(function(f){return f>0.0008;}).length;
+  var fundPos=fundHist.filter(function(f){return f>0.000008;}).length;
   if(S.funding!==null){
-    if(fund<-0.0003){ l1Bull+=4; L1.push({t:'Fonlama '+( fund*100).toFixed(4)+'% → Short maliyetli, squeeze riski',bull:true,w:4}); }
+    if(fund<-0.000003){ l1Bull+=4; L1.push({t:'Fonlama '+( fund*100).toFixed(4)+'% → Short maliyetli, squeeze riski',bull:true,w:4}); }
     else if(fund<0){ l1Bull+=2; L1.push({t:'Fonlama negatif → Short baskılı ortam',bull:true,w:2}); }
-    else if(fund>0.002){ l1Bear+=4; L1.push({t:'Fonlama '+(fund*100).toFixed(4)+'% → Aşırı long, cascade riski',bull:false,w:4}); }
-    else if(fund>0.001){ l1Bear+=2; L1.push({t:'Fonlama yüksek → Long ağırlıklı risk',bull:false,w:2}); }
+    else if(fund>0.00002){ l1Bear+=4; L1.push({t:'Fonlama '+(fund*100).toFixed(4)+'% → Aşırı long, cascade riski',bull:false,w:4}); }
+    else if(fund>0.00001){ l1Bear+=2; L1.push({t:'Fonlama yüksek → Long ağırlıklı risk',bull:false,w:2}); }
     else { L1.push({t:'Fonlama '+(fund*100).toFixed(4)+'% normal',bull:null,w:0}); }
     // 3 ardışık negatif/pozitif fonlama — TRENDİN DEVAMI
     if(fundNeg>=2){ l1Bull+=1; L1.push({t:fundNeg+' periyot ard arda negatif fonlama',bull:true,w:1}); }
@@ -1316,7 +1316,7 @@ function v9Signal(cl, hi, lo, vols){
   }
 
   // ─── YENİ: BTC Dominance Trendi ───
-  if(S.btcDominance!=null&&S.btcDomHistory.length>=2){
+  if(S.btcDominance!=null&&S.btcDomHistory&&S.btcDomHistory.length>=2){
     var domPrev=S.btcDomHistory[S.btcDomHistory.length-1].val;
     var domChg=S.btcDominance-domPrev;
     var mom3local=(cl[n-1]-cl[Math.max(0,n-4)])/cl[Math.max(0,n-4)];
@@ -1346,8 +1346,8 @@ function v9Signal(cl, hi, lo, vols){
   // ─── V12 YENİ: Fonlama 24 saatlik trend birikimi ───
   var ftV=calcFundingTrend(S.fundingHistory);
   S.fundTrend24h=ftV.sum; S.fundTrendDir=ftV.dir;
-  if(ftV.dir===1){ l1Bull+=2; L1.push({t:'Fonlama 24s birikim negatif ('+( ftV.sum*100).toFixed(3)+'%) → Short yükümlülük birikti',bull:true,w:2}); }
-  else if(ftV.dir===-1){ l1Bear+=2; L1.push({t:'Fonlama 24s birikim pozitif (+'+(ftV.sum*100).toFixed(3)+'%) → Long yükümlülük birikti',bull:false,w:2}); }
+  if(ftV.dir===1){ l1Bull+=2; L1.push({t:'Fonlama birikim negatif → LONG avantajı ('+( ftV.sum*100).toFixed(3)+'%) → Short yükümlülük birikti',bull:true,w:2}); }
+  else if(ftV.dir===-1){ l1Bear+=2; L1.push({t:'Fonlama birikim pozitif → SHORT baskı (+'+(ftV.sum*100).toFixed(3)+'%) → Long yükümlülük birikti',bull:false,w:2}); }
 
   // ─── V12 YENİ: Gerçek CVD sinyali ───
   if(S.cvdTrend!==0){
@@ -1861,7 +1861,7 @@ function confluence(){
     layers.push({name:'RSI Günlük',sc:sc4,dir:dir4,w:.15,note:'RSI '+r1d.toFixed(1)});
   }
   // YENİ: BTC.D trendi confluence'a ekle
-  if(S.btcDominance!=null&&S.btcDomHistory.length>=1){
+  if(S.btcDominance!=null&&S.btcDomHistory&&S.btcDomHistory.length>=1){
     var domPrev2=S.btcDomHistory[S.btcDomHistory.length-1].val;
     var domTrend=S.btcDominance-domPrev2;
     var scD=50,dirD='NOTR';
@@ -2016,7 +2016,7 @@ function renMasterPanel(){
     wrLabel='GÜÇLÜ SİNYAL';
     wrDesc='3 katman hizalı. Tarihsel isabet aralığı. Her işlemde kayıp olabilir.';
   } else if(l1Active&&res.confidence>=50){
-    historicalWR='%42–48'; wrColor='var(--Y)'; wrBars=2;
+    historicalWR='%'+Math.round(res.confidence)+'±8'; wrColor=res.confidence>=65?'var(--G)':'var(--Y)'; wrBars=res.confidence>=65?3:2;
     wrLabel='NORMAL SİNYAL';
     wrDesc='2 katman hizalı. L1 onaylıyor. Başabaş civarı, dikkatli ol.';
   } else {
@@ -2051,7 +2051,7 @@ function renMasterPanel(){
       +'<div><div class="v9-label">V9 ANA SİNYAL · 1H</div>'
         +'<div class="v9-main-sig">'+dispSig+'</div>'
         +'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--t2);margin-top:4px">'
-          +(res.strength==='STRONG_LONG'?'★ GÜÇLÜ LONG':res.strength==='STRONG_SHORT'?'★ GÜÇLÜ SHORT':res.strength==='WEAK_LONG'?'ZAYIF LONG':res.strength==='WEAK_SHORT'?'ZAYIF SHORT':'BEKLİYOR')
+          +(res.strength==='STRONG_LONG'?'★ GÜÇLÜ LONG':res.strength==='STRONG_SHORT'?'★ GÜÇLÜ SHORT':res.strength==='WEAK_LONG'?'⚠ Zayıf Sinyal':res.strength==='WEAK_SHORT'?'⚠ Zayıf Sinyal':res.sig==='NEUTRAL'?'Sinyal Yok':'Normal Sinyal')
         +'</div>'
       +'</div>'
       +'<div class="v9-conf-box">'
@@ -2111,9 +2111,10 @@ function buildCard(tf, label, cl, hi, lo, vols){
   var l1ok=(res.layer1.dir!=='NOTR');
   var cardWR, cardWRColor;
   if(dispSig==='NOTR'){ cardWR='—'; cardWRColor='var(--t2)'; }
-  else if(allV&&l1ok){ cardWR='~%52-58'; cardWRColor='var(--G)'; }
-  else if(l1ok){ cardWR='~%42-48'; cardWRColor='var(--Y)'; }
-  else { cardWR='~%32-38'; cardWRColor='var(--R)'; }
+  else if(res.confidence>=80){ cardWR='~%58-65'; cardWRColor='var(--G)'; }
+  else if(res.confidence>=65){ cardWR='~%52-58'; cardWRColor='var(--G)'; }
+  else if(res.confidence>=50){ cardWR='~%45-52'; cardWRColor='var(--Y)'; }
+  else { cardWR='~%38-45'; cardWRColor='var(--R)'; }
 
   return '<div class="scard '+cls+'"><div class="sglow"></div>'
     +'<div class="sc-top">'
@@ -2175,7 +2176,7 @@ function renPrice(){
     var lsBadge=S.lsRatio!=null?'<span class="badge '+(S.lsRatio>1.4?'bn':S.lsRatio<0.8?'bp':'bb')+'">L/S: '+S.lsRatio.toFixed(2)+'</span>':'';
     el('pBadges').innerHTML=''
       +'<span class="badge '+(chg>=0?'bp':'bn')+'">'+fPct(chg)+'</span>'
-      +(S.funding!=null?'<span class="badge '+(S.funding<0?'bp':S.funding>0.001?'bn':'bb')+'">Fonlama: '+(S.funding*100).toFixed(4)+'%</span>':'')
+      +(S.funding!=null?'<span class="badge '+(S.funding<0?'bp':S.funding>0.00001?'bn':'bb')+'">Fonlama: '+(S.funding*100).toFixed(4)+'%</span>':'')
       +(S.fg?'<span class="badge by">F&G: '+S.fg.value+' '+S.fg.label+'</span>':'')
       +oiBadge+lsBadge
       +(S.c1h?'<span class="badge bb">ATR: $'+atr(S.h1h||[],S.l1h||[],S.c1h).toFixed(0)+'</span>':'')
@@ -2298,8 +2299,8 @@ function renTurev(){
     var lsNote=S.lsRatio!=null?(S.lsRatio>1.6?'Aşırı long squeeze riski':S.lsRatio<0.75?'Aşırı short → long squeeze':' Dengeli'):'Yükleniyor';
     var lsC=S.lsRatio!=null?(S.lsRatio>1.6?'var(--R)':S.lsRatio<0.75?'var(--G)':'var(--Y)'):'var(--t2)';
     var fund=S.funding;
-    var fundColor=fund!=null?(fund<-0.0002?'var(--G)':fund>0.001?'var(--R)':'var(--Y)'):'var(--t2)';
-    var fundNote=fund!=null?(fund<-0.0003?'Negatif — Short maliyetli, long lehine':fund<0?'Negatif — Short baskılı':fund>0.002?'YÜKSEK — Aşırı kaldıraçlı risk':fund>0.001?'Yüksek — Long ağırlıklı':'Normal bölge'):'';
+    var fundColor=fund!=null?(fund<-0.000002?'var(--G)':fund>0.00001?'var(--R)':'var(--Y)'):'var(--t2)';
+    var fundNote=fund!=null?(fund<-0.000003?'Negatif — Short maliyetli, long lehine':fund<0?'Negatif — Short baskılı':fund>0.00002?'YÜKSEK — Aşırı kaldıraçlı risk':fund>0.00001?'Yüksek — Long ağırlıklı':'Normal bölge'):'';
     var items=[
       {lbl:'Open Interest',val:oiV,note:oiNote,color:oiC},
       {lbl:'OI Değişimi',val:S.oiChange!=null?(S.oiChange>=0?'+':'')+S.oiChange.toFixed(2)+'%':'--',note:S.oiChange!=null?(Math.abs(S.oiChange)>3?'Anlamlı değişim':'Stabil'):'',color:S.oiChange!=null?(S.oiChange>3?'var(--G)':S.oiChange<-3?'var(--R)':'var(--Y)'):'var(--t2)'},
@@ -2345,18 +2346,19 @@ function renTurev(){
   var ab=document.getElementById('apiBox');
   if(ab){
     var apiSources=[
-      {name:'Fiyat (Bitget)',    key:'Bitget',     zorunlu:true},
-      {name:'Fiyat (CoinGecko)',key:'CoinGecko',   zorunlu:false},
-      {name:'1H Klines',        key:'Huobi1H',     zorunlu:true},
-      {name:'4H Klines',        key:'Huobi4H',     zorunlu:false},
-      {name:'1D Klines',        key:'Huobi1D',     zorunlu:false},
-      {name:'1W Klines',        key:'Huobi1W',     zorunlu:false},
-      {name:'Fonlama',          key:'Fonlama',      zorunlu:true},
-      {name:'Fear & Greed',     key:'FG',           zorunlu:true},
-      {name:'Open Interest',    key:'OI-Bitget',    zorunlu:false},
-      {name:'L/S Oranı',        key:'LS-Bitget',    zorunlu:false},
-      {name:'Order Book',       key:'OB',           zorunlu:false},
-      {name:'Haberler',         key:'news',         zorunlu:false},
+      {name:'Fiyat (Binance)',   key:'BN-Price',  zorunlu:true},
+      {name:'Fiyat (Bitget)',    key:'Bitget',     zorunlu:false},
+      {name:'1H Klines',        key:'Huobi1H',    zorunlu:true},
+      {name:'4H Klines',        key:'Huobi4H',    zorunlu:false},
+      {name:'1D Klines',        key:'Huobi1D',    zorunlu:false},
+      {name:'1W Klines',        key:'Huobi1W',    zorunlu:false},
+      {name:'Fonlama',          key:'BN-Fund',    zorunlu:true},
+      {name:'Fear & Greed',     key:'FG',         zorunlu:true},
+      {name:'Open Interest',    key:'OI-Bitget',  zorunlu:false},
+      {name:'L/S Oranı',        key:'LS-Binance', zorunlu:false},
+      {name:'Order Book',       key:'OB',         zorunlu:false},
+      {name:'BTC Dominance',    key:'Dom',        zorunlu:false},
+      {name:'Haberler',         key:'news',       zorunlu:false},
     ];
     var health=dataHealth();
     var healthColor=health>=80?'var(--G)':health>=50?'var(--Y)':'var(--R)';
@@ -2377,7 +2379,7 @@ function renTurev(){
       +'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:18px;font-weight:700;color:'+healthColor+'">'+health+'%</div>'
       +'</div>'
       +rows
-      +'<div style="font-size:9px;color:var(--dim);margin-top:8px">Proxy: corsproxy.io → codetabs.com sırasıyla denenir. Zorunlu kaynaklar başarısız olursa sinyal engellenir.</div>';
+      +'<div style="font-size:9px;color:var(--dim);margin-top:8px">Not: V9 Sinyal, EMA Trend yönünden farklı olabilir — V9 tüm 3 katmanı (F&G, Fonlama, OI, RSI, MACD, Momentum) birleştirir. Proxy: corsproxy.io → codetabs.com sırasıyla denenir. Zorunlu kaynaklar başarısız olursa sinyal engellenir.</div>';
   }
 
   // ── 5 YENİ ÖZELLİK PANELİ ──
@@ -2395,11 +2397,18 @@ function renTurev(){
     html2+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:2px;color:var(--t2);margin-bottom:10px">⏰ FONLAMA SAYACI · Her 8 Saatte Bir</div>';
     html2+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">';
     html2+='<div style="background:var(--s2);border-radius:8px;padding:12px;text-align:center"><div style="font-size:8px;color:var(--t2);margin-bottom:4px">KALAN SÜRE</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:18px;font-weight:700;color:'+(fundAlarm?'var(--G)':'var(--O)')+'">'+( S.fundingCountdown||'--')+'</div></div>';
-    html2+='<div style="background:var(--s2);border-radius:8px;padding:12px;text-align:center"><div style="font-size:8px;color:var(--t2);margin-bottom:4px">MEVCUT FONLAMA</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:18px;font-weight:700;color:'+(S.funding!=null?(S.funding<0?'var(--G)':S.funding>0.001?'var(--R)':'var(--Y)'):'var(--t2)')+'">'+( S.funding!=null?(S.funding*100).toFixed(4)+'%':'--')+'</div></div>';
+    html2+='<div style="background:var(--s2);border-radius:8px;padding:12px;text-align:center"><div style="font-size:8px;color:var(--t2);margin-bottom:4px">MEVCUT FONLAMA</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:18px;font-weight:700;color:'+(S.funding!=null?(S.funding<0?'var(--G)':S.funding>0.00001?'var(--R)':'var(--Y)'):'var(--t2)')+'">'+( S.funding!=null?(S.funding*100).toFixed(4)+'%':'--')+'</div></div>';
     var nextFundTime=S.fundingNextTs?new Date(S.fundingNextTs).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'}):'--';
     html2+='<div style="background:var(--s2);border-radius:8px;padding:12px;text-align:center"><div style="font-size:8px;color:var(--t2);margin-bottom:4px">SONRAKI SAAT</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:18px;font-weight:700;color:var(--B)">'+nextFundTime+'</div></div>';
-    var fundStrat=S.funding!=null?(S.funding<-0.0001?'✅ LONG fırsatı — Short kapatır':S.funding>0.0008?'⚠ SHORT fırsatı — Long kapatır':'━ Nötr fonlama'):'Bekleniyor';
-    var fundStratC=S.funding!=null?(S.funding<-0.0001?'var(--G)':S.funding>0.0008?'var(--R)':'var(--t2)'):'var(--t2)';
+    var fundStrat=S.funding!=null?(
+      S.funding<-0.000005?'✅ LONG fırsatı — Short kapatır':
+      S.funding<0?'↗ Hafif negatif — Long lehine':
+      S.funding>0.00008?'⚠ SHORT fırsatı — Long kapatır':
+      '━ Nötr fonlama'):'Bekleniyor';
+    var fundStratC=S.funding!=null?(
+      S.funding<-0.000005?'var(--G)':
+      S.funding<0?'var(--G)':
+      S.funding>0.00008?'var(--R)':'var(--t2)'):'var(--t2)';
     html2+='<div style="background:var(--s2);border-radius:8px;padding:12px;text-align:center"><div style="font-size:8px;color:var(--t2);margin-bottom:4px">STRATEJİ</div><div style="font-size:11px;font-weight:700;color:'+fundStratC+'">'+fundStrat+'</div></div>';
     html2+='</div>';
     if(fundAlarm) html2+='<div style="margin-top:10px;padding:8px 12px;background:rgba(0,217,126,.1);border-radius:6px;font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:var(--G)">🔔 ALARM: '+fundMins+' dakika kaldı · Negatif fonlama devam ediyor → Güçlü LONG fırsatı!</div>';
@@ -2408,7 +2417,7 @@ function renTurev(){
     // ── TAKER BUY/SELL ORANI ──
     var tbp=S.takerBuyPct;
     var tbpC=tbp!=null?(tbp>62?'var(--G)':tbp<38?'var(--R)':'var(--Y)'):'var(--t2)';
-    var tbpLabel=tbp!=null?(tbp>68?'Güçlü Alım Baskısı':tbp>55?'Hafif Alım':tbp<32?'Güçlü Satış Baskısı':tbp<45?'Hafif Satış':'Dengeli'):'--';
+    var tbpLabel=tbp!=null?(tbp>68?'Güçlü Alım Baskısı':tbp>55?'Hafif Alım':tbp<38?'Güçlü Satış Baskısı':tbp<48?'Hafif Satış':'Dengeli'):'--';
     // Mini bar chart for history
     var tbpBar='';
     if(S.takerHistory.length>0){
@@ -2846,7 +2855,7 @@ async function loadFundingHistory(){
         // 8 periyot toplamı (~64 saat) — negatif birikim = long fırsatı
         var sum=S.fundHistory8.reduce(function(a,b){return a+b;},0);
         S.fundTrend24h=sum;
-        S.fundTrendDir=sum<-0.0006?1:sum>0.0015?-1:0;
+        S.fundTrendDir=sum<-0.000040?1:sum>0.000120?-1:0;
       }
     }
   } catch(e){}
@@ -3581,7 +3590,7 @@ function calcFundingCountdown(){
   S.fundingCountdown=(h>0?h+'s ':'')+m+'d '+s+'s';
   // Alarm: <45dk + negatif fonlama → LONG fırsatı
   var minsLeft=Math.floor(totalSec/60);
-  if(minsLeft<=45&&S.funding!=null&&S.funding<-0.0001&&!S.fundingAlarmFired){
+  if(minsLeft<=45&&S.funding!=null&&S.funding<-0.000001&&!S.fundingAlarmFired){
     S.fundingAlarmFired=true;
     toast('⚡ FONLAMA ALARMI: '+minsLeft+'dk kaldı · Negatif fonlama ('+( S.funding*100).toFixed(4)+'%) → LONG fırsatı!',6000);
     try{var ctx=new(window.AudioContext||window.webkitAudioContext)();var osc=ctx.createOscillator();var g=ctx.createGain();osc.connect(g);g.connect(ctx.destination);osc.frequency.setValueAtTime(660,ctx.currentTime);g.gain.setValueAtTime(0.1,ctx.currentTime);g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.5);osc.start(ctx.currentTime);osc.stop(ctx.currentTime+0.5);}catch(e){}
@@ -3706,8 +3715,8 @@ function calcNetFlowScore(){
   }
   // Fonlama birikim trendi
   if(S.fundTrend24h!=null){
-    if(S.fundTrend24h<-0.001) score+=20; // Negatif birikim = exchange'den çıkış
-    else if(S.fundTrend24h>0.003) score-=20; // Pozitif birikim = exchange'e giriş
+    if(S.fundTrend24h<-0.000040) score+=20; // Negatif birikim = exchange'den çıkış
+    else if(S.fundTrend24h>0.000120) score-=20; // Pozitif birikim = exchange'e giriş
   }
   // BTC dominance artıyorsa altcoin'den BTC'ye geçiş = alım baskısı
   if(S.btcDomHistory&&S.btcDomHistory.length>=1&&S.btcDominance!=null){
@@ -3982,14 +3991,14 @@ function premiumSignal(){
   (function(){
     var met=false, partial=false, dir=null, val='--', desc='', histWR=0;
     var fundNeg=(fundHist.filter(function(f){return f<0;})).length;
-    var fundHigh=(fundHist.filter(function(f){return f>0.001;})).length;
+    var fundHigh=(fundHist.filter(function(f){return f>0.00001;})).length;
     if(fund!==null){
       val=(fund*100).toFixed(4)+'%';
-      if(fund<-0.0004){ met=true; dir='LONG'; histWR=70; desc='Aşırı negatif — Short maliyetli, long squeeze yakın'; }
-      else if(fund<-0.0001&&fundNeg>=2){ met=true; dir='LONG'; histWR=65; desc='Negatif + '+fundNeg+' ardışık negatif periyot'; }
+      if(fund<-0.000004){ met=true; dir='LONG'; histWR=70; desc='Aşırı negatif — Short maliyetli, long squeeze yakın'; }
+      else if(fund<-0.000001&&fundNeg>=2){ met=true; dir='LONG'; histWR=65; desc='Negatif + '+fundNeg+' ardışık negatif periyot'; }
       else if(fund<0){ partial=true; dir='LONG'; desc='Negatif ama zayıf — '+fundNeg+' ardışık negatif bekleniyor (şu an '+fundNeg+')'; }
-      else if(fund>0.002){ met=true; dir='SHORT'; histWR=68; desc='Aşırı yüksek — Kaldıraçlı longs, cascade riski'; }
-      else if(fund>0.0008&&fundHigh>=2){ met=true; dir='SHORT'; histWR=62; desc='Yüksek + '+fundHigh+' ardışık yüksek periyot'; }
+      else if(fund>0.00002){ met=true; dir='SHORT'; histWR=68; desc='Aşırı yüksek — Kaldıraçlı longs, cascade riski'; }
+      else if(fund>0.000008&&fundHigh>=2){ met=true; dir='SHORT'; histWR=62; desc='Yüksek + '+fundHigh+' ardışık yüksek periyot'; }
       else if(fund>0.0005){ partial=true; dir='SHORT'; desc='Yüksek ama henüz eşik altı — '+fund.toFixed(4)+' → hedef >0.001'; }
       else { desc='Fonlama '+val+' normal bölge — Extreme bekle (<-0.04% veya >0.10%)'; }
     } else { desc='Fonlama verisi yükleniyor...'; }
@@ -4275,10 +4284,10 @@ function renTahmin(){
     var fundRecent=S.fundHistory8.slice(-2).reduce(function(a,b){return a+b;},0)/2;
     if(S.fundTrendDir===1){
       bullPts+=2;
-      checks.push({id:'fund',label:'Fonlama negatife dönüyor',sub:'Son 64s birikim: '+(fundSum*100).toFixed(4)+'%',bull:true,pts:2,strong:Math.abs(fundSum)>0.001});
+      checks.push({id:'fund',label:'Fonlama negatife dönüyor',sub:'Son 64s birikim: '+(fundSum*100).toFixed(4)+'%',bull:true,pts:2,strong:Math.abs(fundSum)>0.00001});
     } else if(S.fundTrendDir===-1){
       bearPts+=2;
-      checks.push({id:'fund',label:'Fonlama pozitife dönüyor',sub:'Son 64s birikim: +'+(fundSum*100).toFixed(4)+'%',bull:false,pts:2,strong:fundSum>0.002});
+      checks.push({id:'fund',label:'Fonlama pozitife dönüyor',sub:'Son 64s birikim: +'+(fundSum*100).toFixed(4)+'%',bull:false,pts:2,strong:fundSum>0.00002});
     } else {
       checks.push({id:'fund',label:'Fonlama nötr',sub:'Birikim: '+(fundSum>=0?'+':'')+(fundSum*100).toFixed(4)+'%',bull:null,pts:0,strong:false});
     }
@@ -4354,10 +4363,10 @@ function renTahmin(){
 
   // ─── 7. FONLAMA ANI DEĞERİ ─── ağırlık: 1
   if(S.funding!==null){
-    if(S.funding<-0.0003){
-      bullPts+=1; checks.push({id:'fundnow',label:'Anlık fonlama çok negatif',sub:(S.funding*100).toFixed(4)+'% → Short maliyetli',bull:true,pts:1,strong:S.funding<-0.001});
-    } else if(S.funding>0.0015){
-      bearPts+=1; checks.push({id:'fundnow',label:'Anlık fonlama çok pozitif',sub:'+'+(S.funding*100).toFixed(4)+'% → Long cascade riski',bull:false,pts:1,strong:S.funding>0.003});
+    if(S.funding<-0.000003){
+      bullPts+=1; checks.push({id:'fundnow',label:'Anlık fonlama çok negatif',sub:(S.funding*100).toFixed(4)+'% → Short maliyetli',bull:true,pts:1,strong:S.funding<-0.00001});
+    } else if(S.funding>0.000015){
+      bearPts+=1; checks.push({id:'fundnow',label:'Anlık fonlama çok pozitif',sub:'+'+(S.funding*100).toFixed(4)+'% → Long cascade riski',bull:false,pts:1,strong:S.funding>0.00003});
     } else {
       checks.push({id:'fundnow',label:'Fonlama normal',sub:(S.funding>=0?'+':'')+(S.funding*100).toFixed(4)+'%',bull:null,pts:0,strong:false});
     }
@@ -5195,7 +5204,9 @@ function renderAll(){
   var turevTc=document.getElementById('tc-turev');
   if(turevTc&&turevTc.classList.contains('on')) renTurev();
   var haberTc=document.getElementById('tc-haber');
-  if(haberTc&&haberTc.classList.contains('on')){ renOrderFlow(); renLiqMap(); }
+  if(haberTc&&haberTc.classList.contains('on')){ renOrderFlow(); renLiqMap(); renNewsGrid(); renOrderBook2(); }
+  var logTc=document.getElementById('tc-log');
+  if(logTc&&logTc.classList.contains('on')) renLog();
 }
 // ════════════════════════════════════════════
 // ◈ SİNYAL MERKEZİ — 3 Motor Tek Ekranda
@@ -5225,10 +5236,10 @@ function renMerkez(){
   var fundStatus='neutral', fundDir=null, fundDetail='', fundVal='--';
   if(fund!=null){
     fundVal=(fund*100).toFixed(4)+'%';
-    if(fund<-0.0002){ fundStatus='good'; fundDir='LONG'; fundDetail='Negatif → Short maliyetli'+(fundMins!=null&&fundMins<=45?' · '+fundMins+'dk kaldı ⚡':''); }
+    if(fund<-0.000002){ fundStatus='good'; fundDir='LONG'; fundDetail='Negatif → Short maliyetli'+(fundMins!=null&&fundMins<=45?' · '+fundMins+'dk kaldı ⚡':''); }
     else if(fund<0){ fundStatus='warn'; fundDir='LONG'; fundDetail='Hafif negatif'; }
-    else if(fund>0.0015){ fundStatus='bad'; fundDir='SHORT'; fundDetail='Yüksek → Long maliyetli'+(fundMins!=null&&fundMins<=45?' · '+fundMins+'dk kaldı ⚡':''); }
-    else if(fund>0.0007){ fundStatus='warn'; fundDir='SHORT'; fundDetail='Hafif pozitif'; }
+    else if(fund>0.000015){ fundStatus='bad'; fundDir='SHORT'; fundDetail='Yüksek → Long maliyetli'+(fundMins!=null&&fundMins<=45?' · '+fundMins+'dk kaldı ⚡':''); }
+    else if(fund>0.000007){ fundStatus='warn'; fundDir='SHORT'; fundDetail='Hafif pozitif'; }
     else { fundStatus='neutral'; fundDetail='Normal bölge'; }
   }
   kriterler.push({label:'Fonlama',val:fundVal,status:fundStatus,dir:fundDir,detail:fundDetail,icon:'💰'});
@@ -5254,12 +5265,11 @@ function renMerkez(){
     else if(ofS.pct<=35){ ofStatus='bad'; ofDir='SHORT'; ofDetail='Güçlü satış baskısı'; }
     else if(ofS.pct<=45){ ofStatus='warn'; ofDir='SHORT'; ofDetail='Hafif satış baskısı'; }
     else { ofStatus='neutral'; ofDetail='Dengeli akış'; }
-    // Balina varsa vurgula
+    // Balina: yönü DEĞİŞTİRME, sadece bilgi olarak ekle
     if(S.ofWhaleTs&&(Date.now()-S.ofWhaleTs)<120000){
       var wa=S.ofWhaleAlert;
       ofDetail+=' · 🐳 $'+Math.round(wa.usd/1000)+'K '+wa.side;
-      if(wa.side==='BUY') ofDir='LONG';
-      else ofDir='SHORT';
+      // ofDir balina emriyle override edilmez — 60s hacim oranı daha güvenilir
     }
   } else if(!S.ofConnected){
     ofVal='Bağlanıyor...'; ofDetail='WebSocket bekleniyor';
@@ -5291,13 +5301,15 @@ function renMerkez(){
   var pmSig=pm.sig==='WAIT'?'BEKLE':pm.sig;
   var motorLong=[scSig,anaSig,pmSig].filter(function(s){return s==='LONG';}).length;
   var motorShort=[scSig,anaSig,pmSig].filter(function(s){return s==='SHORT';}).length;
+  var motorBekle=3-motorLong-motorShort;
   var motorStatus='neutral', motorDir=null, motorDetail='', motorVal='--';
-  motorVal=motorLong+'/3 LONG · '+motorShort+'/3 SHORT';
+  // Daha açıklayıcı gösterim: her motorun durumunu tek tek say
+  motorVal=motorLong+'/3 LONG · '+motorShort+'/3 SHORT'+(motorBekle>0?' · '+motorBekle+'/3 BEKLE':'');
   if(motorLong===3){ motorStatus='good'; motorDir='LONG'; motorDetail='3 motor hemfikir → Güçlü giriş'; }
   else if(motorShort===3){ motorStatus='good'; motorDir='SHORT'; motorDetail='3 motor hemfikir → Güçlü giriş'; }
-  else if(motorLong===2){ motorStatus='warn'; motorDir='LONG'; motorDetail='2/3 motor LONG'; }
-  else if(motorShort===2){ motorStatus='warn'; motorDir='SHORT'; motorDetail='2/3 motor SHORT'; }
-  else { motorStatus='bad'; motorDetail='Motorlar karışık → Bekle'; }
+  else if(motorLong===2){ motorStatus='warn'; motorDir='LONG'; motorDetail='2/3 motor LONG · '+[scSig,anaSig,pmSig].map(function(s,i){return ['Scalp','Ana','Premium'][i]+':'+s;}).join(' '); }
+  else if(motorShort===2){ motorStatus='warn'; motorDir='SHORT'; motorDetail='2/3 motor SHORT · '+[scSig,anaSig,pmSig].map(function(s,i){return ['Scalp','Ana','Premium'][i]+':'+s;}).join(' '); }
+  else { motorStatus='bad'; motorDetail='Karışık: Scalp:'+scSig+' · Ana:'+anaSig+' · Premium:'+pmSig; }
   kriterler.push({label:'Motor Oyları',val:motorVal,status:motorStatus,dir:motorDir,detail:motorDetail,icon:'🔮'});
 
   // 6. SCALP TEYİT
@@ -5617,10 +5629,10 @@ function scalpSignal(){
   // ── 7. FONLAMA (ağırlık 2) ──
   if(S.funding!=null){
     var fund=S.funding;
-    if(fund<-0.0002){ bull+=2; factors.push({name:'Fonlama Negatif',dir:'LONG',w:2,val:(fund*100).toFixed(4)+'%',strong:fund<-0.0005}); }
+    if(fund<-0.000002){ bull+=2; factors.push({name:'Fonlama Negatif',dir:'LONG',w:2,val:(fund*100).toFixed(4)+'%',strong:fund<-0.000005}); }
     else if(fund<0){ bull+=1; factors.push({name:'Fonlama Hafif Neg.',dir:'LONG',w:1,val:(fund*100).toFixed(4)+'%',strong:false}); }
-    else if(fund>0.0015){ bear+=2; factors.push({name:'Fonlama Yüksek',dir:'SHORT',w:2,val:(fund*100).toFixed(4)+'%',strong:fund>0.003}); }
-    else if(fund>0.0007){ bear+=1; factors.push({name:'Fonlama Pozitif',dir:'SHORT',w:1,val:(fund*100).toFixed(4)+'%',strong:false}); }
+    else if(fund>0.000015){ bear+=2; factors.push({name:'Fonlama Yüksek',dir:'SHORT',w:2,val:(fund*100).toFixed(4)+'%',strong:fund>0.003}); }
+    else if(fund>0.000007){ bear+=1; factors.push({name:'Fonlama Pozitif',dir:'SHORT',w:1,val:(fund*100).toFixed(4)+'%',strong:false}); }
     else { factors.push({name:'Fonlama Normal',dir:'NOTR',w:0,val:(fund*100).toFixed(4)+'%',strong:false}); }
   }
 
@@ -5669,7 +5681,7 @@ function scalpSignal(){
   // ── 12. FONLAMA SAATİ (ağırlık 2) — Öncesi momentum ──
   var fundMins=S.fundingNextTs?Math.floor((S.fundingNextTs-Date.now())/60000):99;
   if(fundMins<=45&&fundMins>=5&&S.funding!=null){
-    if(S.funding<-0.0001){ bull+=2; factors.push({name:'Fonlama '+fundMins+'dk · Negatif Short Kapatır',dir:'LONG',w:2,val:(S.funding*100).toFixed(4)+'%',strong:fundMins<=20}); }
+    if(S.funding<-0.000001){ bull+=2; factors.push({name:'Fonlama '+fundMins+'dk · Negatif Short Kapatır',dir:'LONG',w:2,val:(S.funding*100).toFixed(4)+'%',strong:fundMins<=20}); }
     else if(S.funding>0.0008){ bear+=2; factors.push({name:'Fonlama '+fundMins+'dk · Pozitif Long Kapatır',dir:'SHORT',w:2,val:(S.funding*100).toFixed(4)+'%',strong:fundMins<=20}); }
     else if(fundMins<=20){ factors.push({name:'Fonlama '+fundMins+'dk · Nötr',dir:'NOTR',w:0,val:'',strong:false}); }
   }
