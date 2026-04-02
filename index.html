@@ -5318,14 +5318,15 @@ function renMerkez(){
   var motorShort=[scSig,anaSig,pmSig].filter(function(s){return s==='SHORT';}).length;
   var motorBekle=3-motorLong-motorShort;
   var motorStatus='neutral', motorDir=null, motorDetail='', motorVal='--';
-  // Daha açıklayıcı gösterim: her motorun durumunu tek tek say
   motorVal=motorLong+'/3 LONG · '+motorShort+'/3 SHORT'+(motorBekle>0?' · '+motorBekle+'/3 BEKLE':'');
   if(motorLong===3){ motorStatus='good'; motorDir='LONG'; motorDetail='3 motor hemfikir → Güçlü giriş'; }
   else if(motorShort===3){ motorStatus='good'; motorDir='SHORT'; motorDetail='3 motor hemfikir → Güçlü giriş'; }
-  else if(motorLong===2){ motorStatus='warn'; motorDir='LONG'; motorDetail='2/3 motor LONG · '+[scSig,anaSig,pmSig].map(function(s,i){return ['Scalp','Ana','Premium'][i]+':'+s;}).join(' '); }
-  else if(motorShort===2){ motorStatus='warn'; motorDir='SHORT'; motorDetail='2/3 motor SHORT · '+[scSig,anaSig,pmSig].map(function(s,i){return ['Scalp','Ana','Premium'][i]+':'+s;}).join(' '); }
-  else { motorStatus='bad'; motorDetail='Karışık: Scalp:'+scSig+' · Ana:'+anaSig+' · Premium:'+pmSig; }
-  kriterler.push({label:'Motor Oyları',val:motorVal,status:motorStatus,dir:motorDir,detail:motorDetail,icon:'🔮'});
+  else if(motorLong===2){ motorStatus='warn'; motorDir='LONG'; motorDetail='2/3 motor LONG · '+[scSig,anaSig,pmSig].map(function(s,i){return ['Scalp','Ana','Premium'][i]+':'+s;}).join(' · '); }
+  else if(motorShort===2){ motorStatus='warn'; motorDir='SHORT'; motorDetail='2/3 motor SHORT · '+[scSig,anaSig,pmSig].map(function(s,i){return ['Scalp','Ana','Premium'][i]+':'+s;}).join(' · '); }
+  else { motorStatus='neutral'; motorDetail='Karışık: Scalp:'+scSig+' · Ana:'+anaSig+' · Premium:'+pmSig; }
+  // Motor Oyları karar hesabına girmiyor — sadece bilgi amaçlı gösterim
+  // Diğer 10 kriter zaten motorların baktığı veriyi kapsıyor (çifte ceza önlenir)
+  kriterler.push({label:'Motor Oyları',val:motorVal,status:motorStatus,dir:motorDir,detail:motorDetail,icon:'🔮',bilgiOnly:true});
 
   // 6. SCALP TEYİT
   var teyitStatus='neutral', teyitDir=null, teyitDetail='', teyitVal='--';
@@ -5350,9 +5351,9 @@ function renMerkez(){
       trendStatus='good'; trendDir='LONG'; trendVal='YUKARI';
       trendDetail='Fiyat EMA200 üstü · EMA20>50';
     } else if(p<ana.ema200&&ana.ema20<ana.ema50){
-      // Aşağı trend = SHORT = olumsuz kriter (kırmızı)
-      trendStatus='bad'; trendDir='SHORT'; trendVal='AŞAĞI';
-      trendDetail='Fiyat EMA200 altı · EMA20<50';
+      // Aşağı trend → warn (bad değil) — kırılım başlangıçları tam burada olur
+      trendStatus='warn'; trendDir='SHORT'; trendVal='AŞAĞI';
+      trendDetail='⚠ Kontr-trend · EMA200 altı · EMA20<50';
     } else if(p>ana.ema200){
       trendStatus='warn'; trendDir='LONG'; trendVal='HAFIF YUKARI';
       trendDetail='EMA200 üstü ama karışık';
@@ -5496,49 +5497,39 @@ function renMerkez(){
   kriterler.push({label:'Fonlama Saati',val:fsVal,status:fsStatus,dir:fsDir,detail:fsDetail,icon:'⏰'});
 
   // ── GENEL KARAR ──
-  // goodCount = LONG yönünde iyi kriterler
-  // alignedCount = her yönde kendi lehine kriter sayısı
-  var goodCount=kriterler.filter(function(k){return k.status==='good'&&k.dir==='LONG';}).length;
-  var goodShortCount=kriterler.filter(function(k){return (k.status==='good'||k.status==='bad')&&k.dir==='SHORT';}).length;
-  // bad status SHORT yönünde 'iyi' sayılır (trend aşağı = short için iyi)
-  var badCount=kriterler.filter(function(k){return k.status==='bad'&&k.dir!=='SHORT';}).length;
-  var badShortCount=kriterler.filter(function(k){return k.status==='bad'&&k.dir==='LONG';}).length;
-  var longVotes=kriterler.filter(function(k){return k.dir==='LONG';}).length;
-  var shortVotes=kriterler.filter(function(k){return k.dir==='SHORT';}).length;
-  var totalK=kriterler.length;
+  // bilgiOnly=true olan kriterler (Motor Oyları) karar hesabına girmez
+  var aktifKriterler=kriterler.filter(function(k){return !k.bilgiOnly;});
+  var totalK=aktifKriterler.length;
 
-  // LONG lehine olumsuz: bad status + LONG yön
-  var longBadCount=kriterler.filter(function(k){return k.status==='bad'&&k.dir==='SHORT';}).length;
-  // SHORT lehine olumsuz: good status + LONG yön
-  var shortBadCount=kriterler.filter(function(k){return k.status==='bad'&&k.dir==='LONG';}).length;
-
-  // Aktif kriter sayısı: LONG için (good+LONG) + SHORT olumsuzların sayısı
-  var longActiveGood=kriterler.filter(function(k){return k.status==='good'&&k.dir==='LONG';}).length;
-  var shortActiveGood=kriterler.filter(function(k){return (k.status==='bad'&&k.dir==='SHORT')||(k.status==='good'&&k.dir==='SHORT');}).length;
+  var longActiveGood=aktifKriterler.filter(function(k){return k.status==='good'&&k.dir==='LONG';}).length;
+  var shortActiveGood=aktifKriterler.filter(function(k){return (k.status==='bad'&&k.dir==='SHORT')||(k.status==='good'&&k.dir==='SHORT');}).length;
+  var longBadCount=aktifKriterler.filter(function(k){return k.status==='bad'&&k.dir==='SHORT';}).length;
+  var shortBadCount=aktifKriterler.filter(function(k){return k.status==='bad'&&k.dir==='LONG';}).length;
+  var longVotes=aktifKriterler.filter(function(k){return k.dir==='LONG';}).length;
+  var shortVotes=aktifKriterler.filter(function(k){return k.dir==='SHORT';}).length;
 
   var karar='BEKLE', kararC='var(--Y)', kararBg='rgba(251,191,36,.06)', kararBd='rgba(251,191,36,.3)';
   var kararDetail='';
 
-  if(longActiveGood>=6&&longBadCount===0&&longVotes>=6&&confirmed==='LONG'){
+  if(longActiveGood>=5&&longBadCount===0&&longVotes>=5&&confirmed==='LONG'){
     karar='LONG GİR'; kararC='var(--G)'; kararBg='rgba(0,217,126,.08)'; kararBd='rgba(0,217,126,.4)';
     kararDetail='✅ '+longActiveGood+'/'+totalK+' kriter uygun · Güçlü LONG sinyali';
-  } else if(shortActiveGood>=6&&shortBadCount===0&&shortVotes>=6&&confirmed==='SHORT'){
+  } else if(shortActiveGood>=5&&shortBadCount===0&&shortVotes>=5&&confirmed==='SHORT'){
     karar='SHORT GİR'; kararC='var(--R)'; kararBg='rgba(255,59,92,.08)'; kararBd='rgba(255,59,92,.4)';
     kararDetail='✅ '+shortActiveGood+'/'+totalK+' kriter SHORT lehine · Güçlü SHORT sinyali';
-  } else if(longActiveGood>=5&&longBadCount<=1&&longVotes>shortVotes&&confirmed==='LONG'){
+  } else if(longActiveGood>=4&&longBadCount<=1&&longVotes>shortVotes&&confirmed==='LONG'){
     karar='LONG DÜŞÜNEBİLİRSİN'; kararC='var(--G)'; kararBg='rgba(0,217,126,.04)'; kararBd='rgba(0,217,126,.25)';
     kararDetail='⚠ '+longActiveGood+'/'+totalK+' kriter uygun · Dikkatli gir';
-  } else if(shortActiveGood>=5&&shortBadCount<=1&&shortVotes>longVotes&&confirmed==='SHORT'){
+  } else if(shortActiveGood>=4&&shortBadCount<=1&&shortVotes>longVotes&&confirmed==='SHORT'){
     karar='SHORT DÜŞÜNEBİLİRSİN'; kararC='var(--R)'; kararBg='rgba(255,59,92,.04)'; kararBd='rgba(255,59,92,.25)';
     kararDetail='⚠ '+shortActiveGood+'/'+totalK+' kriter SHORT lehine · Dikkatli gir';
-  } else if(longBadCount>=4||shortBadCount>=4){
+  } else if(longBadCount>=3||shortBadCount>=3){
     karar='RİSKLİ'; kararC='var(--R)'; kararBg='rgba(255,59,92,.05)'; kararBd='rgba(255,59,92,.2)';
-    var riskYon=longBadCount>=4?'LONG':'SHORT';
+    var riskYon=longBadCount>=3?'LONG':'SHORT';
     kararDetail='❌ '+Math.max(longBadCount,shortBadCount)+' kriter olumsuz · '+riskYon+' tehlikeli · Girme';
   } else {
     karar='BEKLE';
-    var aktifLong=longActiveGood, aktifShort=shortActiveGood;
-    kararDetail='Kriterler henüz yeterli değil · LONG:'+aktifLong+' SHORT:'+aktifShort+'/'+totalK;
+    kararDetail='Kriterler henüz yeterli değil · LONG:'+longActiveGood+' SHORT:'+shortActiveGood+'/'+totalK;
   }
 
   // ── HTML RENDER ──
@@ -5584,9 +5575,9 @@ function renMerkez(){
       kc='var(--t2)'; kbg='var(--s2)'; kbd='var(--dim2)';
     }
     var dot=k.status==='good'||k.status==='bad'?(k.dir==='LONG'?'▲':k.dir==='SHORT'?'▼':'●'):k.status==='warn'?'◐':'━';
-    html+='<div style="background:'+kbg+';border:1px solid '+kbd+';border-radius:10px;padding:10px 12px">';
+    html+='<div style="background:'+kbg+';border:1px solid '+kbd+';border-radius:10px;padding:10px 12px'+(k.bilgiOnly?';opacity:0.75':'')+';">';
     html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">';
-    html+='<span style="font-size:10px;color:var(--t2)">'+k.icon+' '+k.label+'</span>';
+    html+='<span style="font-size:10px;color:var(--t2)">'+k.icon+' '+k.label+(k.bilgiOnly?' <span style="font-size:7px;background:rgba(255,255,255,.1);padding:1px 4px;border-radius:3px;color:var(--t2)">BİLGİ</span>':'')+'</span>';
     html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:8px;color:'+kc+'">'+dot+'</span>';
     html+='</div>';
     // Fonlama kartı için sayaç özel gösterim
