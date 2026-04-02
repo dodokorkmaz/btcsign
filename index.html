@@ -3587,7 +3587,7 @@ function calcFundingCountdown(){
   var h=Math.floor(totalSec/3600);
   var m=Math.floor((totalSec%3600)/60);
   var s=totalSec%60;
-  S.fundingCountdown=(h>0?h+'s ':'')+m+'d '+s+'s';
+  S.fundingCountdown=(h>0?h+'sa ':'')+m+'dk '+s+'s';
   // Alarm: <45dk + negatif fonlama → LONG fırsatı
   var minsLeft=Math.floor(totalSec/60);
   if(minsLeft<=45&&S.funding!=null&&S.funding<-0.000001&&!S.fundingAlarmFired){
@@ -5234,7 +5234,7 @@ function renMerkez(){
   var fund=S.funding;
   var fundMins=S.fundingNextTs?Math.floor((S.fundingNextTs-Date.now())/60000):null;
   var fundSecs=S.fundingNextTs?Math.floor(((S.fundingNextTs-Date.now())/1000)%60):null;
-  var fundCountStr=fundMins!=null&&fundMins>=0?fundMins+'dk '+(fundSecs!=null?fundSecs+'s':''):'--';
+  var fundCountStr=fundMins!=null&&fundMins>=0?(fundMins>=60?Math.floor(fundMins/60)+'sa '+(fundMins%60)+'dk':fundMins+'dk ')+(fundSecs!=null?fundSecs+'s':''):'--';
   var fundStatus='neutral', fundDir=null, fundDetail='', fundVal='--';
   if(fund!=null){
     fundVal=(fund*100).toFixed(4)+'%';
