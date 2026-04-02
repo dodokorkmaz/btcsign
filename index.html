@@ -5226,21 +5226,35 @@ function renMerkez(){
   var seans=utcH>=8&&utcH<17?'Londra':utcH>=13&&utcH<22?'New York':utcH>=0&&utcH<8?'Asya':'Ölü Zone';
   var seansOk=seans==='Londra'||seans==='New York';
 
-  // ── 8 KRİTER DEĞERLENDİRME ──
+  // ── 11 KRİTER DEĞERLENDİRME ──
   // Her kriter: {label, value, status: 'good'/'warn'/'bad'/'neutral', detail, dir}
   var kriterler=[];
 
   // 1. FONLAMA
   var fund=S.funding;
   var fundMins=S.fundingNextTs?Math.floor((S.fundingNextTs-Date.now())/60000):null;
+  var fundSecs=S.fundingNextTs?Math.floor(((S.fundingNextTs-Date.now())/1000)%60):null;
+  var fundCountStr=fundMins!=null&&fundMins>=0?fundMins+'dk '+(fundSecs!=null?fundSecs+'s':''):'--';
   var fundStatus='neutral', fundDir=null, fundDetail='', fundVal='--';
   if(fund!=null){
     fundVal=(fund*100).toFixed(4)+'%';
-    if(fund<-0.000002){ fundStatus='good'; fundDir='LONG'; fundDetail='Negatif → Short maliyetli'+(fundMins!=null&&fundMins<=45?' · '+fundMins+'dk kaldı ⚡':''); }
-    else if(fund<0){ fundStatus='warn'; fundDir='LONG'; fundDetail='Hafif negatif'; }
-    else if(fund>0.000015){ fundStatus='bad'; fundDir='SHORT'; fundDetail='Yüksek → Long maliyetli'+(fundMins!=null&&fundMins<=45?' · '+fundMins+'dk kaldı ⚡':''); }
-    else if(fund>0.000007){ fundStatus='warn'; fundDir='SHORT'; fundDetail='Hafif pozitif'; }
-    else { fundStatus='neutral'; fundDetail='Normal bölge'; }
+    var fundAlarmNow=fundMins!=null&&fundMins<=45&&fundMins>=0;
+    if(fund<-0.000002){
+      fundStatus=fundAlarmNow?'good':'warn'; fundDir='LONG';
+      fundDetail='Negatif → Short maliyetli'+(fundAlarmNow?' · ⏰ '+fundCountStr+' kaldı ⚡':'  · Sonraki: '+fundCountStr);
+    } else if(fund<0){
+      fundStatus='warn'; fundDir='LONG';
+      fundDetail='Hafif negatif · '+fundCountStr+' kaldı';
+    } else if(fund>0.000015){
+      fundStatus=fundAlarmNow?'good':'warn'; fundDir='SHORT';
+      fundDetail='Yüksek → Long maliyetli'+(fundAlarmNow?' · ⏰ '+fundCountStr+' kaldı ⚡':'  · Sonraki: '+fundCountStr);
+    } else if(fund>0.000007){
+      fundStatus='warn'; fundDir='SHORT';
+      fundDetail='Hafif pozitif · '+fundCountStr+' kaldı';
+    } else {
+      fundStatus='neutral';
+      fundDetail='Normal bölge · '+fundCountStr+' kaldı';
+    }
   }
   kriterler.push({label:'Fonlama',val:fundVal,status:fundStatus,dir:fundDir,detail:fundDetail,icon:'💰'});
 
@@ -5250,7 +5264,7 @@ function renMerkez(){
     lsVal=S.lsRatio.toFixed(2);
     if(S.lsRatio<0.75){ lsStatus='good'; lsDir='LONG'; lsDetail='Aşırı short → Squeeze riski'; }
     else if(S.lsRatio<0.90){ lsStatus='warn'; lsDir='LONG'; lsDetail='Short ağırlıklı'; }
-    else if(S.lsRatio>1.80){ lsStatus='bad'; lsDir='SHORT'; lsDetail='Aşırı long → Dump riski'; }
+    else if(S.lsRatio>1.80){ lsStatus='good'; lsDir='SHORT'; lsDetail='Aşırı long → Dump riski'; }
     else if(S.lsRatio>1.40){ lsStatus='warn'; lsDir='SHORT'; lsDetail='Long ağırlıklı'; }
     else { lsStatus='neutral'; lsDetail='Dengeli'; }
   }
@@ -5262,7 +5276,7 @@ function renMerkez(){
     ofVal='%'+ofS.pct+' alım';
     if(ofS.pct>=65){ ofStatus='good'; ofDir='LONG'; ofDetail='Güçlü alım baskısı'; }
     else if(ofS.pct>=55){ ofStatus='warn'; ofDir='LONG'; ofDetail='Hafif alım baskısı'; }
-    else if(ofS.pct<=35){ ofStatus='bad'; ofDir='SHORT'; ofDetail='Güçlü satış baskısı'; }
+    else if(ofS.pct<=35){ ofStatus='good'; ofDir='SHORT'; ofDetail='Güçlü satış baskısı'; }
     else if(ofS.pct<=45){ ofStatus='warn'; ofDir='SHORT'; ofDetail='Hafif satış baskısı'; }
     else { ofStatus='neutral'; ofDetail='Dengeli akış'; }
     // Balina: yönü DEĞİŞTİRME, sadece bilgi olarak ekle
@@ -5289,7 +5303,8 @@ function renMerkez(){
     } else if(nearShort&&nearShort.pct>0){
       var distS=nearShort.pct.toFixed(1);
       liqVal='$'+Math.round(nearShort.price).toLocaleString('tr-TR');
-      liqStatus=parseFloat(distS)<1.5?'good':'warn';
+      // SHORT liki yukarıda = direnç = olumsuz kriter (kırmızı)
+      liqStatus=parseFloat(distS)<1.5?'bad':'warn';
       liqDir='SHORT'; liqDetail='Short liki %'+distS+' yukarıda → Direnç bölgesi';
     } else { liqVal='Uzak'; liqDetail='Yakın liki bölgesi yok'; }
   } else { liqVal='Hesaplanıyor...'; liqDetail='1H veri gerekli'; }
@@ -5331,10 +5346,20 @@ function renMerkez(){
   // 7. 1H TREND (EMA200)
   var trendStatus='neutral', trendDir=null, trendDetail='', trendVal='--';
   if(ana&&p){
-    if(p>ana.ema200&&ana.ema20>ana.ema50){ trendStatus='good'; trendDir='LONG'; trendVal='YUKARI'; trendDetail='Fiyat EMA200 üstü · EMA20>50'; }
-    else if(p<ana.ema200&&ana.ema20<ana.ema50){ trendStatus='good'; trendDir='SHORT'; trendVal='AŞAĞI'; trendDetail='Fiyat EMA200 altı · EMA20<50'; }
-    else if(p>ana.ema200){ trendStatus='warn'; trendDir='LONG'; trendVal='HAFIF YUKARI'; trendDetail='EMA200 üstü ama karışık'; }
-    else { trendStatus='warn'; trendDir='SHORT'; trendVal='HAFIF AŞAĞI'; trendDetail='EMA200 altı ama karışık'; }
+    if(p>ana.ema200&&ana.ema20>ana.ema50){
+      trendStatus='good'; trendDir='LONG'; trendVal='YUKARI';
+      trendDetail='Fiyat EMA200 üstü · EMA20>50';
+    } else if(p<ana.ema200&&ana.ema20<ana.ema50){
+      // Aşağı trend = SHORT = olumsuz kriter (kırmızı)
+      trendStatus='bad'; trendDir='SHORT'; trendVal='AŞAĞI';
+      trendDetail='Fiyat EMA200 altı · EMA20<50';
+    } else if(p>ana.ema200){
+      trendStatus='warn'; trendDir='LONG'; trendVal='HAFIF YUKARI';
+      trendDetail='EMA200 üstü ama karışık';
+    } else {
+      trendStatus='warn'; trendDir='SHORT'; trendVal='HAFIF AŞAĞI';
+      trendDetail='EMA200 altı ama karışık';
+    }
   } else { trendVal='Hesaplanıyor...'; }
   kriterler.push({label:'1H Trend',val:trendVal,status:trendStatus,dir:trendDir,detail:trendDetail,icon:'📈'});
 
@@ -5349,35 +5374,175 @@ function renMerkez(){
   }
   kriterler.push({label:'ATR/Seans',val:atrVal,status:atrStatus,dir:null,detail:atrDetail,icon:'🕒'});
 
+  // 9. ORDER BOOK DUVARI — büyük alım/satım blokları
+  var obwStatus='neutral', obwDir=null, obwDetail='', obwVal='--';
+  if(S.ob&&p){
+    var bidW=S.obBidWall, askW=S.obAskWall;
+    if(bidW&&askW){
+      var distBid=Math.abs(p-bidW.price)/p*100;
+      var distAsk=Math.abs(p-askW.price)/p*100;
+      // Yakın büyük alım duvarı = güçlü destek
+      if(distBid<0.8&&bidW.usd>500000){
+        obwStatus='good'; obwDir='LONG';
+        obwVal='$'+Math.round(bidW.price).toLocaleString('tr-TR');
+        obwDetail='Güçlü alım duvarı $'+Math.round(bidW.usd/1000)+'K · %'+distBid.toFixed(1)+' uzakta';
+      } else if(distAsk<0.8&&askW.usd>500000){
+        // Büyük satış duvarı: LONG için kötü (direnç), SHORT için iyi (fiyat geri döner)
+        obwStatus='good'; obwDir='SHORT';
+        obwVal='$'+Math.round(askW.price).toLocaleString('tr-TR');
+        obwDetail='Büyük satış duvarı $'+Math.round(askW.usd/1000)+'K · %'+distAsk.toFixed(1)+' uzakta → Direnç güçlü';
+      } else if(S.obBias>0.3){
+        obwStatus='warn'; obwDir='LONG';
+        obwVal='Bid ağırlıklı';
+        obwDetail='OB '+Math.round(S.obBias*100)+'% alım tarafında';
+      } else if(S.obBias<-0.3){
+        obwStatus='warn'; obwDir='SHORT';
+        obwVal='Ask ağırlıklı';
+        obwDetail='OB '+Math.round(Math.abs(S.obBias)*100)+'% satış tarafında';
+      } else {
+        obwVal='Dengeli'; obwDetail='Büyük duvar yok · OB nötr';
+      }
+    } else if(S.obBias!==0){
+      obwVal=S.obBias>0?'Bid ağırlıklı':'Ask ağırlıklı';
+      obwDetail='OB bias: '+(S.obBias*100).toFixed(0)+'%';
+      obwStatus=S.obBias>0.3?'warn':S.obBias<-0.3?'warn':'neutral';
+      obwDir=S.obBias>0.2?'LONG':S.obBias<-0.2?'SHORT':null;
+    } else { obwVal='Veri yok'; obwDetail='OB yükleniyor'; }
+  }
+  kriterler.push({label:'OB Duvarı',val:obwVal,status:obwStatus,dir:obwDir,detail:obwDetail,icon:'🧱'});
+
+  // 10. ROUND NUMBER + PİVOT SEVİYELERİ
+  var rnStatus='neutral', rnDir=null, rnDetail='', rnVal='--';
+  if(p){
+    // Round number seviyeleri ($1000'lik basamaklar)
+    var roundK=Math.round(p/1000)*1000;
+    var distRound=Math.abs(p-roundK)/p*100;
+    // Pivot seviyeleri
+    var pvtData=(S.h1h&&S.l1h&&S.c1h)?pivotPoints(S.h1h,S.l1h,S.c1h):null;
+    // Swing High/Low son 48 mum
+    var swH=(S.h1h&&S.h1h.length>=10)?Math.max.apply(null,S.h1h.slice(-48)):null;
+    var swL=(S.l1h&&S.l1h.length>=10)?Math.min.apply(null,S.l1h.slice(-48)):null;
+
+    var closestLevel=null, closestDist=999, closestType='';
+    var levels=[];
+    if(pvtData){
+      levels.push({v:pvtData.R1,t:'R1',bull:false});
+      levels.push({v:pvtData.R2,t:'R2',bull:false});
+      levels.push({v:pvtData.S1,t:'S1',bull:true});
+      levels.push({v:pvtData.S2,t:'S2',bull:true});
+      levels.push({v:pvtData.P, t:'Pivot',bull:null});
+    }
+    if(swH) levels.push({v:swH,t:'SwHigh',bull:false});
+    if(swL) levels.push({v:swL,t:'SwLow',bull:true});
+    // Round number
+    levels.push({v:roundK,t:'$'+Math.round(roundK/1000)+'K',bull:null});
+    // Bir üst ve alt round number
+    levels.push({v:roundK+1000,t:'$'+Math.round((roundK+1000)/1000)+'K',bull:false});
+    levels.push({v:roundK-1000,t:'$'+Math.round((roundK-1000)/1000)+'K',bull:true});
+
+    levels.forEach(function(lv){
+      var d=Math.abs(p-lv.v)/p*100;
+      if(d<closestDist&&d<1.5){ closestDist=d; closestLevel=lv; }
+    });
+
+    if(closestLevel){
+      var isSupport=closestLevel.bull===true; // Altındaki seviye destek
+      var isResist=closestLevel.bull===false; // Üstündeki seviye direnç
+      // Fiyat seviyenin üstünde mi altında mı?
+      var aboveLevel=p>closestLevel.v;
+      rnVal='$'+Math.round(closestLevel.v).toLocaleString('tr-TR')+' ('+closestLevel.t+')';
+      if(aboveLevel&&isSupport){
+        rnStatus='good'; rnDir='LONG';
+        rnDetail='Destek üstündesin · %'+closestDist.toFixed(1)+' uzakta → Güçlü zemin';
+      } else if(!aboveLevel&&isResist){
+        rnStatus='good'; rnDir='SHORT';
+        rnDetail='Direnç bölgesi altında · %'+closestDist.toFixed(1)+' uzakta → Baskı var';
+      } else if(aboveLevel&&isResist){
+        rnStatus='warn'; rnDir='SHORT';
+        rnDetail='Direnç yakında · %'+closestDist.toFixed(1)+' uzakta → Dikkat';
+      } else if(!aboveLevel&&isSupport){
+        rnStatus='warn'; rnDir='LONG';
+        rnDetail='Destek yakında · %'+closestDist.toFixed(1)+' uzakta → İzle';
+      } else {
+        // Round number veya Pivot
+        rnVal='$'+Math.round(closestLevel.v).toLocaleString('tr-TR')+' ('+closestLevel.t+')';
+        rnStatus='warn'; rnDetail='Kritik seviye · %'+closestDist.toFixed(1)+' uzakta · İki yönlü';
+      }
+    } else {
+      rnVal='Uzak'; rnDetail='Yakın kritik seviye yok · Serbest bölge';
+    }
+  }
+  kriterler.push({label:'Destek/Direnç',val:rnVal,status:rnStatus,dir:rnDir,detail:rnDetail,icon:'📐'});
+
+  // 11. FONLAMA SAATI FIRSATI
+  var fsStatus='neutral', fsDir=null, fsDetail='', fsVal='--';
+  if(S.funding!=null&&S.fundingNextTs){
+    var minsLeft=Math.floor((S.fundingNextTs-Date.now())/60000);
+    fsVal=minsLeft>0?minsLeft+'dk kaldı':'Şimdi';
+    if(minsLeft<=45&&minsLeft>=0&&S.funding<-0.000002){
+      fsStatus='good'; fsDir='LONG';
+      fsDetail='⚡ '+minsLeft+'dk kaldı · Negatif fonlama → LONG squeeze yakın';
+    } else if(minsLeft<=45&&minsLeft>=0&&S.funding>0.000015){
+      fsStatus='good'; fsDir='SHORT';
+      fsDetail='⚡ '+minsLeft+'dk kaldı · Pozitif fonlama → Long kapatır';
+    } else if(minsLeft<=60&&S.funding<0){
+      fsStatus='warn'; fsDir='LONG';
+      fsDetail=minsLeft+'dk kaldı · Hafif negatif fonlama';
+    } else {
+      fsVal=minsLeft+'dk kaldı';
+      fsDetail='Fonlama fırsatı yok şu an';
+    }
+  }
+  kriterler.push({label:'Fonlama Saati',val:fsVal,status:fsStatus,dir:fsDir,detail:fsDetail,icon:'⏰'});
+
   // ── GENEL KARAR ──
-  var goodCount=kriterler.filter(function(k){return k.status==='good';}).length;
-  var badCount=kriterler.filter(function(k){return k.status==='bad';}).length;
+  // goodCount = LONG yönünde iyi kriterler
+  // alignedCount = her yönde kendi lehine kriter sayısı
+  var goodCount=kriterler.filter(function(k){return k.status==='good'&&k.dir==='LONG';}).length;
+  var goodShortCount=kriterler.filter(function(k){return (k.status==='good'||k.status==='bad')&&k.dir==='SHORT';}).length;
+  // bad status SHORT yönünde 'iyi' sayılır (trend aşağı = short için iyi)
+  var badCount=kriterler.filter(function(k){return k.status==='bad'&&k.dir!=='SHORT';}).length;
+  var badShortCount=kriterler.filter(function(k){return k.status==='bad'&&k.dir==='LONG';}).length;
   var longVotes=kriterler.filter(function(k){return k.dir==='LONG';}).length;
   var shortVotes=kriterler.filter(function(k){return k.dir==='SHORT';}).length;
+  var totalK=kriterler.length;
+
+  // LONG lehine olumsuz: bad status + LONG yön
+  var longBadCount=kriterler.filter(function(k){return k.status==='bad'&&k.dir==='SHORT';}).length;
+  // SHORT lehine olumsuz: good status + LONG yön
+  var shortBadCount=kriterler.filter(function(k){return k.status==='bad'&&k.dir==='LONG';}).length;
+
+  // Aktif kriter sayısı: LONG için (good+LONG) + SHORT olumsuzların sayısı
+  var longActiveGood=kriterler.filter(function(k){return k.status==='good'&&k.dir==='LONG';}).length;
+  var shortActiveGood=kriterler.filter(function(k){return (k.status==='bad'&&k.dir==='SHORT')||(k.status==='good'&&k.dir==='SHORT');}).length;
 
   var karar='BEKLE', kararC='var(--Y)', kararBg='rgba(251,191,36,.06)', kararBd='rgba(251,191,36,.3)';
   var kararDetail='';
-  if(goodCount>=5&&badCount===0&&longVotes>=5&&confirmed==='LONG'){
+
+  if(longActiveGood>=6&&longBadCount===0&&longVotes>=6&&confirmed==='LONG'){
     karar='LONG GİR'; kararC='var(--G)'; kararBg='rgba(0,217,126,.08)'; kararBd='rgba(0,217,126,.4)';
-    kararDetail='✅ '+goodCount+'/8 kriter uygun · Güçlü LONG sinyali';
-  } else if(goodCount>=5&&badCount===0&&shortVotes>=5&&confirmed==='SHORT'){
+    kararDetail='✅ '+longActiveGood+'/'+totalK+' kriter uygun · Güçlü LONG sinyali';
+  } else if(shortActiveGood>=6&&shortBadCount===0&&shortVotes>=6&&confirmed==='SHORT'){
     karar='SHORT GİR'; kararC='var(--R)'; kararBg='rgba(255,59,92,.08)'; kararBd='rgba(255,59,92,.4)';
-    kararDetail='✅ '+goodCount+'/8 kriter uygun · Güçlü SHORT sinyali';
-  } else if(goodCount>=4&&badCount<=1&&longVotes>shortVotes&&confirmed==='LONG'){
+    kararDetail='✅ '+shortActiveGood+'/'+totalK+' kriter SHORT lehine · Güçlü SHORT sinyali';
+  } else if(longActiveGood>=5&&longBadCount<=1&&longVotes>shortVotes&&confirmed==='LONG'){
     karar='LONG DÜŞÜNEBİLİRSİN'; kararC='var(--G)'; kararBg='rgba(0,217,126,.04)'; kararBd='rgba(0,217,126,.25)';
-    kararDetail='⚠ '+goodCount+'/8 kriter uygun · Dikkatli gir';
-  } else if(goodCount>=4&&badCount<=1&&shortVotes>longVotes&&confirmed==='SHORT'){
+    kararDetail='⚠ '+longActiveGood+'/'+totalK+' kriter uygun · Dikkatli gir';
+  } else if(shortActiveGood>=5&&shortBadCount<=1&&shortVotes>longVotes&&confirmed==='SHORT'){
     karar='SHORT DÜŞÜNEBİLİRSİN'; kararC='var(--R)'; kararBg='rgba(255,59,92,.04)'; kararBd='rgba(255,59,92,.25)';
-    kararDetail='⚠ '+goodCount+'/8 kriter uygun · Dikkatli gir';
-  } else if(badCount>=3){
+    kararDetail='⚠ '+shortActiveGood+'/'+totalK+' kriter SHORT lehine · Dikkatli gir';
+  } else if(longBadCount>=4||shortBadCount>=4){
     karar='RİSKLİ'; kararC='var(--R)'; kararBg='rgba(255,59,92,.05)'; kararBd='rgba(255,59,92,.2)';
-    kararDetail='❌ '+badCount+' kriter olumsuz · Girme';
+    var riskYon=longBadCount>=4?'LONG':'SHORT';
+    kararDetail='❌ '+Math.max(longBadCount,shortBadCount)+' kriter olumsuz · '+riskYon+' tehlikeli · Girme';
   } else {
-    karar='BEKLE'; kararDetail='Kriterler henüz yeterli değil · '+goodCount+'/8 uygun';
+    karar='BEKLE';
+    var aktifLong=longActiveGood, aktifShort=shortActiveGood;
+    kararDetail='Kriterler henüz yeterli değil · LONG:'+aktifLong+' SHORT:'+aktifShort+'/'+totalK;
   }
 
   // ── HTML RENDER ──
-  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:2px;color:var(--t2);margin-bottom:10px">🎯 KARAR MERKEZİ · 8 KRİTER · '+new Date().toLocaleTimeString('tr-TR')+'</div>';
+  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:2px;color:var(--t2);margin-bottom:10px">🎯 KARAR MERKEZİ · 11 KRİTER · '+new Date().toLocaleTimeString('tr-TR')+'</div>';
 
   // BÜYÜK KARAR KARTI
   html+='<div style="background:'+kararBg+';border:2px solid '+kararBd+';border-radius:16px;padding:20px;margin-bottom:14px;text-align:center;position:relative;overflow:hidden">';
@@ -5398,19 +5563,39 @@ function renMerkez(){
   }
   html+='</div>';
 
-  // 8 KRİTER GRID
-  html+='<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px">';
+  // 11 KRİTER GRID
+  html+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">';
   kriterler.forEach(function(k){
-    var kc=k.status==='good'?'var(--G)':k.status==='warn'?'var(--Y)':k.status==='bad'?'var(--R)':'var(--t2)';
-    var kbg=k.status==='good'?'rgba(0,217,126,.05)':k.status==='warn'?'rgba(251,191,36,.04)':k.status==='bad'?'rgba(255,59,92,.05)':'var(--s2)';
-    var kbd=k.status==='good'?'rgba(0,217,126,.2)':k.status==='warn'?'rgba(251,191,36,.15)':k.status==='bad'?'rgba(255,59,92,.2)':'var(--dim2)';
-    var dot=k.status==='good'?'●':k.status==='warn'?'◐':k.status==='bad'?'○':'━';
+    // Renk: yön bazlı — LONG=yeşil, SHORT=kırmızı, nötr=sarı/gri
+    var kc, kbg, kbd;
+    if(k.status==='good'||k.status==='bad'){
+      if(k.dir==='LONG'){
+        kc='var(--G)'; kbg='rgba(0,217,126,.05)'; kbd='rgba(0,217,126,.2)';
+      } else if(k.dir==='SHORT'){
+        kc='var(--R)'; kbg='rgba(255,59,92,.05)'; kbd='rgba(255,59,92,.2)';
+      } else {
+        kc=k.status==='good'?'var(--G)':'var(--R)';
+        kbg=k.status==='good'?'rgba(0,217,126,.05)':'rgba(255,59,92,.05)';
+        kbd=k.status==='good'?'rgba(0,217,126,.2)':'rgba(255,59,92,.2)';
+      }
+    } else if(k.status==='warn'){
+      kc='var(--Y)'; kbg='rgba(251,191,36,.04)'; kbd='rgba(251,191,36,.15)';
+    } else {
+      kc='var(--t2)'; kbg='var(--s2)'; kbd='var(--dim2)';
+    }
+    var dot=k.status==='good'||k.status==='bad'?(k.dir==='LONG'?'▲':k.dir==='SHORT'?'▼':'●'):k.status==='warn'?'◐':'━';
     html+='<div style="background:'+kbg+';border:1px solid '+kbd+';border-radius:10px;padding:10px 12px">';
     html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">';
     html+='<span style="font-size:10px;color:var(--t2)">'+k.icon+' '+k.label+'</span>';
     html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:8px;color:'+kc+'">'+dot+'</span>';
     html+='</div>';
-    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:'+kc+'">'+k.val+'</div>';
+    // Fonlama kartı için sayaç özel gösterim
+    if(k.label==='Fonlama'&&fundCountStr&&fundCountStr!=='--'){
+      html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:'+kc+'">'+k.val+'</div>';
+      html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;font-weight:700;color:'+(fundMins!=null&&fundMins<=45?'var(--O)':'var(--t2)')+';margin-top:3px">⏰ '+fundCountStr+'</div>';
+    } else {
+      html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:'+kc+'">'+k.val+'</div>';
+    }
     html+='<div style="font-size:9px;color:var(--t2);margin-top:2px">'+k.detail+'</div>';
     if(k.dir) html+='<div style="font-size:8px;font-weight:700;color:'+kc+';margin-top:3px">→ '+k.dir+'</div>';
     html+='</div>';
@@ -6234,7 +6419,15 @@ async function init(){
   // Order Flow WebSocket — 3 saniye sonra başlat (sayfa yüklendikten sonra)
   setTimeout(startOrderFlow, 3000);
   renderAll();
-  setInterval(function(){var e=document.getElementById('clock');if(e)e.textContent=new Date().toLocaleTimeString('tr-TR');updateSessionUI();},1000);
+  setInterval(function(){
+    var e=document.getElementById('clock');
+    if(e) e.textContent=new Date().toLocaleTimeString('tr-TR');
+    updateSessionUI();
+    // Fonlama sayacını saniye bazında güncelle
+    calcFundingCountdown();
+    var mzTc=document.getElementById('tc-merkez');
+    if(mzTc&&mzTc.classList.contains('on')) renMerkez();
+  },1000);
   // 15s: Fiyat + OI + L/S + CVD
   setInterval(async function(){
     await loadPrice();
