@@ -4448,12 +4448,12 @@ function renTahmin(){
   var minSignalPts=5;
   if(isDeadZone) minSignalPts=99; // Tamamen engelle
   else if(!isLondonNY) minSignalPts=7; // Normal Asya: daha katı
-  // 4H trend karşı cezası
+  // 4H trend karşı cezası — hafifletildi, kırılımlar trend karşısında başlar
   if(trend4h!==0){
     if((dir==='LONG'&&trend4h===-1)||(dir==='SHORT'&&trend4h===1)){
-      // Karşı trend: puana %30 ceza
-      dominantPts=Math.round(dominantPts*0.70);
-      if(minSignalPts<9) minSignalPts=9;
+      // Karşı trend: puana %15 ceza (eskiden %30)
+      dominantPts=Math.round(dominantPts*0.85);
+      if(minSignalPts<7) minSignalPts=7; // eskiden 9
     }
   }
 
@@ -5956,11 +5956,12 @@ function scalpSignal(){
 
   var isContraTrend=(sig==='LONG'&&trend1h===-1)||(sig==='SHORT'&&trend1h===1);
   if(isContraTrend&&sig!=='BEKLE'){
-    if(bull<7&&bear<7) sig='BEKLE';
+    // 1H kontr-trend: eşiği 7'den 6'ya düşür
+    if(bull<6&&bear<6) sig='BEKLE';
   }
-  // 4H trende kesin karşıysa ve puan düşükse engelle
+  // 4H trende karşıysa eşiği düşür — kırılımlar zaten trend karşısında başlar
   var isContra4h=(sig==='LONG'&&trend4h===-1)||(sig==='SHORT'&&trend4h===1);
-  if(isContra4h&&sig!=='BEKLE'&&Math.max(bull,bear)<9) sig='BEKLE';
+  if(isContra4h&&sig!=='BEKLE'&&Math.max(bull,bear)<7) sig='BEKLE';
 
   var utcH=new Date().getUTCHours();
   var isDead=(utcH>=2&&utcH<6);
