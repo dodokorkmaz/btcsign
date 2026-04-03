@@ -935,7 +935,7 @@ function detectDivergenceSwing(cl, rsiVals, lookback) {
     if(i2-i1>=minBarGap){
       var priceDrop=(prices[i2]-prices[i1])/prices[i1]; // negatif = fiyat düştü
       var rsiRise=(rsisV[i2]-rsisV[i1])/Math.max(rsisV[i1],1); // pozitif = RSI yükseldi
-      bull = priceDrop < -0.002 && rsiRise > 0.012;
+      bull = priceDrop < -0.0012 && rsiRise > 0.007;
       if(bull) bullStr = Math.min(100, Math.round(Math.abs(priceDrop)*3000 + rsiRise*2000));
     }
   }
@@ -956,7 +956,7 @@ function detectDivergenceSwing(cl, rsiVals, lookback) {
     if(j2-j1>=minBarGap){
       var priceRise=(prices[j2]-prices[j1])/prices[j1];
       var rsiFall=(rsisV[j1]-rsisV[j2])/Math.max(rsisV[j1],1);
-      bear = priceRise > 0.002 && rsiFall > 0.012;
+      bear = priceRise > 0.0012 && rsiFall > 0.007;
       if(bear) bearStr = Math.min(100, Math.round(priceRise*3000 + rsiFall*2000));
     }
   }
@@ -1249,8 +1249,8 @@ function v9Signal(cl, hi, lo, vols){
   var mtfBull=(mom3>0&&mom10>0&&ema9>ema20);
   var mtfBear=(mom3<0&&mom10<0&&ema9<ema20);
   // V13: Mum formasyonu tespiti (open verisi S.o1h'dan, yoksa tahmin)
-  var openArr = (S.o1h&&S.o1h.length>=5) ? S.o1h : cl.map(function(c,i){ return i===0?c:cl[i-1]; });
-  var cpat = detectCandlePatterns(openArr.slice(-8), hi.slice(-8), lo.slice(-8), cl.slice(-8));
+  var openArr = (S.o1h&&S.o1h.length>=5) ? S.o1h : null;
+  var cpat = openArr ? detectCandlePatterns(openArr.slice(-8), hi.slice(-8), lo.slice(-8), cl.slice(-8)) : {patterns:[],bullScore:0,bearScore:0};
 
   // ─── KATMAN 1: MAKRO ─── V13: Gün içi odaklı ağırlıklar
   // CVD(0.28) + Fonlama(0.28) + OI(0.14) + LSR(0.10) + Likidasyon(0.08)
@@ -2160,10 +2160,18 @@ function renPrice(){
       hBadge.style.border='1px solid rgba(251,191,36,.25)';
       hBadge.title='Bazı veriler eski olabilir';
     } else {
-      hBadge.textContent='✓ VERİ SAĞLIKLI';
-      hBadge.style.background='rgba(0,217,126,.08)'; hBadge.style.color='var(--G)';
-      hBadge.style.border='1px solid rgba(0,217,126,.2)';
-      hBadge.title='Tüm kritik veriler güncel';
+      var errCount = Object.values(S.status).filter(function(v){return v==='err';}).length;
+      if(errCount>=3){
+        hBadge.textContent='⛔ PROXY HATASI ('+errCount+')';
+        hBadge.style.background='rgba(255,59,92,.2)'; hBadge.style.color='var(--R)';
+        hBadge.style.border='2px solid rgba(255,59,92,.5)';
+        hBadge.title=errCount+' API kaynağı başarısız. VPN kontrol et.';
+      } else {
+        hBadge.textContent='✓ VERİ SAĞLIKLI';
+        hBadge.style.background='rgba(0,217,126,.08)'; hBadge.style.color='var(--G)';
+        hBadge.style.border='1px solid rgba(0,217,126,.2)';
+        hBadge.title='Tüm kritik veriler güncel';
+      }
     }
   }
   if(el('pMain')){
@@ -3569,8 +3577,8 @@ async function loadKlines(tf){
   }
   if(tf==='4H'){S.c4h=cl;S.h4h=hi;S.l4h=lo;S.v4h=vols;S.o4h=op||null; TS.klines4h=Date.now();}
   if(tf==='1D'){S.c1d=cl;S.h1d=hi;S.l1d=lo;S.v1d=vols; TS.klines1d=Date.now();}
-  if(tf==='30m'){S.c30m=cl;S.h30m=hi;S.l30m=lo;}
-  if(tf==='15m'){S.c15m=cl;S.h15m=hi;S.l15m=lo;S.v15m=vols;S.o15m=op||null;}
+  if(tf==='30m'){S.c30m=cl;S.h30m=hi;S.l30m=lo; TS.klines30m=Date.now();}
+  if(tf==='15m'){S.c15m=cl;S.h15m=hi;S.l15m=lo;S.v15m=vols;S.o15m=op||null; TS.klines15m=Date.now();}
   if(tf==='6H'){S.c6h=cl;S.h6h=hi;S.l6h=lo;}
   if(tf==='1W') TS.klines1w=Date.now();
   S.rsi[tf]=rsi(cl);
@@ -4717,6 +4725,8 @@ function simAutoTrade(dir, tp1, sl, confluenceScore){
   s.lastSignal=dir; s.lastSignalTs=now;
   var toClose=s.positions.filter(function(p){return p.side!==dir;});
   toClose.forEach(function(pos){simClosePosition(pos,S.price,'Sinyal değişti');});
+  var dynSize = Math.max(50, Math.min(500, Math.round(s.balance * 0.01)));
+  s.tradeSize = dynSize;
   if(s.balance>=s.tradeSize&&confluenceScore>=5) simOpenPosition(dir,S.price,tp1,sl);
 }
 function simReset(){
@@ -5803,10 +5813,11 @@ function scalpSignal(){
   }
 
   // ── 6. 15M MUM FORMASYONU (ağırlık 3) ──
-  var op15=S.o15m||cl.map(function(c,i){return i===0?c:cl[i-1];});
-  var cp15=detectCandlePatterns(op15.slice(-6),hi.slice(-6),lo.slice(-6),cl.slice(-6));
-  if(cp15.bullScore>0){ var cw=Math.min(cp15.bullScore,3); bull+=cw; factors.push({name:'🕯 '+(cp15.topBull?cp15.topBull.name:'Boğa Formasyonu'),dir:'LONG',w:cw,val:'',strong:cw>=2}); }
-  if(cp15.bearScore>0){ var cw2=Math.min(cp15.bearScore,3); bear+=cw2; factors.push({name:'🕯 '+(cp15.topBear?cp15.topBear.name:'Ayı Formasyonu'),dir:'SHORT',w:cw2,val:'',strong:cw2>=2}); }
+  if(S.o15m&&S.o15m.length>=5){
+    var cp15=detectCandlePatterns(S.o15m.slice(-6),hi.slice(-6),lo.slice(-6),cl.slice(-6));
+    if(cp15.bullScore>0){ var cw=Math.min(cp15.bullScore,3); bull+=cw; factors.push({name:'🕯 '+(cp15.topBull?cp15.topBull.name:'Boğa Formasyonu'),dir:'LONG',w:cw,val:'',strong:cw>=2}); }
+    if(cp15.bearScore>0){ var cw2=Math.min(cp15.bearScore,3); bear+=cw2; factors.push({name:'🕯 '+(cp15.topBear?cp15.topBear.name:'Ayı Formasyonu'),dir:'SHORT',w:cw2,val:'',strong:cw2>=2}); }
+  }
 
   // ── 7. FONLAMA (ağırlık 2) ──
   if(S.funding!=null){
@@ -6169,15 +6180,12 @@ function renScalp(){
   }
 
   // ── V13 TEYİT MEKANİZMASI ──
-  // Son 3 hesabı buffer'a ekle, 2/3 aynı yönde → teyit edildi
-  S.scalpConfirmBuf.push(res.sig);
-  if(S.scalpConfirmBuf.length>3) S.scalpConfirmBuf.shift();
-
+  // Buffer sadece 15s interval'da güncellenir — renScalp her çağrıldığında push YAPMA
   var longCount=S.scalpConfirmBuf.filter(function(s){return s==='LONG';}).length;
   var shortCount=S.scalpConfirmBuf.filter(function(s){return s==='SHORT';}).length;
   var confirmedSig='BEKLE';
-  if(longCount>=2) confirmedSig='LONG';
-  else if(shortCount>=2) confirmedSig='SHORT';
+  if(longCount>=3) confirmedSig='LONG';
+  else if(shortCount>=3) confirmedSig='SHORT';
 
   // Teyit edilmiş sinyal değişti mi?
   var sigChanged=(confirmedSig!=='BEKLE'&&confirmedSig!==S.scalpConfirmed);
