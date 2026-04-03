@@ -1721,19 +1721,27 @@ function runBacktest(cl, hi, lo, vols, lookback){
       var res=v9Signal(c,h,l,v);
       var sig=res.sig;
       if(sig!=='LONG'&&sig!=='SHORT') continue;
-      // Giriş: sinyal i. mum kapanışında → bir sonraki mum açılışından giriş
-      // cl[i] ≈ bir sonraki mumun açılışı (gerçekçi, lookahead bias yok)
+      // Giriş: sinyal i. mum kapanışında → bir sonraki mum kapanışından giriş
+      // Slippage ekle: gerçek piyasada giriş her zaman biraz daha kötü olur
       var entry=cl[Math.min(i+1,cl.length-1)];
+      var slippage=entry*0.0002; // %0.02 slippage
+      entry=sig==='LONG'?entry+slippage:entry-slippage;
       var atrV=res.atrV||entry*0.012;
-      var FEE=0.0004; // Binance futures taker round-trip 0.02%×2=0.04%
+      var FEE=0.0006; // Binance futures taker round-trip: 0.05%×2 + slippage
       var tpM=res.tpMult||1.8, slM=res.slMult||1.0;
       var tp=sig==='LONG'?entry+atrV*tpM:entry-atrV*tpM;
       var sl=sig==='LONG'?entry-atrV*slM:entry+atrV*slM;
       var outcome=null, barsHeld=0, exitBar=i+1;
-      for(var j=i+2;j<=Math.min(i+48,cl.length-1);j++){ // i+2'den başla (giriş mumunu atla)
+      for(var j=i+2;j<=Math.min(i+48,cl.length-1);j++){
         barsHeld++;
-        if(sig==='LONG'){if(hi[j]>=tp){outcome='WIN';exitBar=j;break;} if(lo[j]<=sl){outcome='LOSS';exitBar=j;break;}}
-        else{if(lo[j]<=tp){outcome='WIN';exitBar=j;break;} if(hi[j]>=sl){outcome='LOSS';exitBar=j;break;}}
+        // Stop ÖNCE kontrol et — kötümser yaklaşım, gerçeğe daha yakın
+        if(sig==='LONG'){
+          if(lo[j]<=sl){outcome='LOSS';exitBar=j;break;}
+          if(hi[j]>=tp){outcome='WIN';exitBar=j;break;}
+        } else {
+          if(hi[j]>=sl){outcome='LOSS';exitBar=j;break;}
+          if(lo[j]<=tp){outcome='WIN';exitBar=j;break;}
+        }
       }
       if(!outcome) continue;
       lastTradeEnd=exitBar; // Bu işlem bitene kadar yeni işlem açma
@@ -3815,7 +3823,8 @@ function startOrderFlow(){
 
         // Buffer'a ekle
         S.ofBuf.push({ts:ts, side:side, usd:usd});
-        // 60 saniye üstündeki eski kayıtları temizle
+        // Max 500 kayıt + 60 saniye temizleme (memory leak önlemi)
+        if(S.ofBuf.length>500) S.ofBuf=S.ofBuf.slice(-200);
         var cutoff=Date.now()-60000;
         S.ofBuf=S.ofBuf.filter(function(x){return x.ts>cutoff;});
 
@@ -5588,11 +5597,35 @@ function renMerkez(){
   }
   kriterler.push({label:'Fonlama Saati',val:fsVal,status:fsStatus,dir:fsDir,detail:fsDetail,icon:'⏰'});
 
-  // ── GENEL KARAR ──
-  // bilgiOnly=true olan kriterler (Motor Oyları) karar hesabına girmez
+  // ── AĞIRLIK SİSTEMİ + HARD RULE ──
+  // Her kritere ağırlık: 15dk-3 saat trade için optimize edilmiş
+  var WEIGHTS = {
+    'Order Flow':    3,  // Anlık gerçek para hareketi — en kritik
+    '1H Trend':      3,  // Ana yön belirleyici
+    'Likidasyon':    2,  // Güçlü geri dönüş sinyali
+    'Scalp Teyit':   2,  // 15m momentum teyidi
+    'Fonlama':       2,  // Pozisyon maliyeti
+    'L/S Oranı':     2,  // Kalabalık taraf
+    'OB Duvarı':     1,  // Destek/direnç duvarı
+    'Destek/Direnç': 1,  // Teknik seviye
+    'ATR/Seans':     1,  // Hareket potansiyeli
+    'Fonlama Saati': 1,  // Zamanlama
+  };
+  // Max puan: 18
+
   var aktifKriterler=kriterler.filter(function(k){return !k.bilgiOnly;});
   var totalK=aktifKriterler.length;
 
+  // Ağırlıklı puan hesabı
+  var longScore=0, shortScore=0, maxScore=0;
+  aktifKriterler.forEach(function(k){
+    var w=WEIGHTS[k.label]||1;
+    maxScore+=w;
+    if(k.status==='good'&&k.dir==='LONG') longScore+=w;
+    else if((k.status==='good'||k.status==='bad')&&k.dir==='SHORT') shortScore+=w;
+  });
+
+  // Eski sayaçlar (uyumluluk için)
   var longActiveGood=aktifKriterler.filter(function(k){return k.status==='good'&&k.dir==='LONG';}).length;
   var shortActiveGood=aktifKriterler.filter(function(k){return (k.status==='bad'&&k.dir==='SHORT')||(k.status==='good'&&k.dir==='SHORT');}).length;
   var longBadCount=aktifKriterler.filter(function(k){return k.status==='bad'&&k.dir==='SHORT';}).length;
@@ -5600,34 +5633,52 @@ function renMerkez(){
   var longVotes=aktifKriterler.filter(function(k){return k.dir==='LONG';}).length;
   var shortVotes=aktifKriterler.filter(function(k){return k.dir==='SHORT';}).length;
 
+  // ── HARD RULES — 3 kritik kural ──
+  // Bu 3 kural sağlanmazsa LONG GİR çıkmaz
+  var ofKriter=aktifKriterler.find(function(k){return k.label==='Order Flow';});
+  var trendKriter=aktifKriterler.find(function(k){return k.label==='1H Trend';});
+  var scalpKriter=aktifKriterler.find(function(k){return k.label==='Scalp Teyit';});
+
+  // LONG için hard rules
+  var longHardOk = (
+    ofKriter&&(ofKriter.dir==='LONG'||(ofKriter.status!=='bad'&&ofKriter.dir!=='SHORT')) // OF en azından nötr
+  );
+  // SHORT için hard rules
+  var shortHardOk = (
+    ofKriter&&(ofKriter.dir==='SHORT'||(ofKriter.status!=='bad'&&ofKriter.dir!=='LONG'))
+  );
+
+  // Eşikler: maxScore=18, LONG GİR için 10+ puan (%55+)
+  var LONG_ENTER  = 10;
+  var LONG_THINK  = 7;
+  var SHORT_ENTER = 10;
+  var SHORT_THINK = 7;
+
   var karar='BEKLE', kararC='var(--Y)', kararBg='rgba(251,191,36,.06)', kararBd='rgba(251,191,36,.3)';
   var kararDetail='';
-  // confirmed şartı kaldırıldı — 45-60 saniyelik gecikmeye neden oluyordu
-  // 5/10 kriter filtresi yeterince katı, teyit beklemeye gerek yok
-  var scDir=sc?sc.sig:'NEUTRAL'; // Scalp yönü — kriter olarak değil bilgi olarak kullanılıyor
+  var kararScore = Math.max(longScore, shortScore);
+  var scDir=sc?sc.sig:'NEUTRAL';
 
-  if(longActiveGood>=5&&longBadCount===0&&longVotes>=5){
+  if(longScore>=LONG_ENTER&&longBadCount===0&&longHardOk){
     karar='LONG GİR'; kararC='var(--G)'; kararBg='rgba(0,217,126,.08)'; kararBd='rgba(0,217,126,.4)';
-    kararDetail='✅ '+longActiveGood+'/'+totalK+' kriter uygun · Güçlü LONG sinyali';
-    // Karar Merkezi LONG alarm
+    kararDetail='✅ '+longScore+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter · Güçlü LONG';
     if(!S._lastKararTg||S._lastKararTg!=='LONG'||(Date.now()-(S._lastKararTgTs||0))>300000){
       S._lastKararTg='LONG'; S._lastKararTgTs=Date.now();
-      tgSend('🟢 <b>KARAR: LONG GİR</b>\n💰 $'+(S.price?Math.round(S.price).toLocaleString('tr-TR'):'--')+'\n📊 '+longActiveGood+'/'+totalK+' kriter uygun\n⏰ '+new Date().toLocaleTimeString('tr-TR'));
+      tgSend('🟢 <b>KARAR: LONG GİR</b>\n💰 $'+(S.price?Math.round(S.price).toLocaleString('tr-TR'):'--')+'\n📊 Puan: '+longScore+'/'+maxScore+' · '+longActiveGood+'/'+totalK+' kriter\n⏰ '+new Date().toLocaleTimeString('tr-TR'));
     }
-  } else if(shortActiveGood>=5&&shortBadCount===0&&shortVotes>=5){
+  } else if(shortScore>=SHORT_ENTER&&shortBadCount===0&&shortHardOk){
     karar='SHORT GİR'; kararC='var(--R)'; kararBg='rgba(255,59,92,.08)'; kararBd='rgba(255,59,92,.4)';
-    kararDetail='✅ '+shortActiveGood+'/'+totalK+' kriter SHORT lehine · Güçlü SHORT sinyali';
-    // Karar Merkezi SHORT alarm
+    kararDetail='✅ '+shortScore+'/'+maxScore+' puan · '+shortActiveGood+'/'+totalK+' kriter · Güçlü SHORT';
     if(!S._lastKararTg||S._lastKararTg!=='SHORT'||(Date.now()-(S._lastKararTgTs||0))>300000){
       S._lastKararTg='SHORT'; S._lastKararTgTs=Date.now();
-      tgSend('🔴 <b>KARAR: SHORT GİR</b>\n💰 $'+(S.price?Math.round(S.price).toLocaleString('tr-TR'):'--')+'\n📊 '+shortActiveGood+'/'+totalK+' kriter SHORT lehine\n⏰ '+new Date().toLocaleTimeString('tr-TR'));
+      tgSend('🔴 <b>KARAR: SHORT GİR</b>\n💰 $'+(S.price?Math.round(S.price).toLocaleString('tr-TR'):'--')+'\n📊 Puan: '+shortScore+'/'+maxScore+' · '+shortActiveGood+'/'+totalK+' kriter\n⏰ '+new Date().toLocaleTimeString('tr-TR'));
     }
-  } else if(longActiveGood>=4&&longBadCount<=1&&longVotes>shortVotes){
+  } else if(longScore>=LONG_THINK&&longBadCount<=1&&longHardOk){
     karar='LONG DÜŞÜNEBİLİRSİN'; kararC='var(--G)'; kararBg='rgba(0,217,126,.04)'; kararBd='rgba(0,217,126,.25)';
-    kararDetail='⚠ '+longActiveGood+'/'+totalK+' kriter uygun · Dikkatli gir';
-  } else if(shortActiveGood>=4&&shortBadCount<=1&&shortVotes>longVotes){
+    kararDetail='⚠ '+longScore+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter · Dikkatli gir';
+  } else if(shortScore>=SHORT_THINK&&shortBadCount<=1&&shortHardOk){
     karar='SHORT DÜŞÜNEBİLİRSİN'; kararC='var(--R)'; kararBg='rgba(255,59,92,.04)'; kararBd='rgba(255,59,92,.25)';
-    kararDetail='⚠ '+shortActiveGood+'/'+totalK+' kriter SHORT lehine · Dikkatli gir';
+    kararDetail='⚠ '+shortScore+'/'+maxScore+' puan · '+shortActiveGood+'/'+totalK+' kriter · Dikkatli gir';
   } else if(longBadCount>=3||shortBadCount>=3){
     karar='RİSKLİ'; kararC='var(--R)'; kararBg='rgba(255,59,92,.05)'; kararBd='rgba(255,59,92,.2)';
     var riskYon=longBadCount>=3?'LONG':'SHORT';
@@ -5637,7 +5688,7 @@ function renMerkez(){
     var proxyWarn='';
     var errCount2=Object.values(S.status).filter(function(v){return v==='err';}).length;
     if(errCount2>=3) proxyWarn=' · ⚠ '+errCount2+' API hatası';
-    kararDetail='Kriterler henüz yeterli değil · LONG:'+longActiveGood+' SHORT:'+shortActiveGood+'/'+totalK+proxyWarn;
+    kararDetail='L:'+longScore+' S:'+shortScore+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter'+proxyWarn;
   }
 
   // ── HTML RENDER ──
@@ -5650,6 +5701,22 @@ function renMerkez(){
   html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:3px;color:var(--t2);margin-bottom:8px">GENEL KARAR</div>';
   html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:36px;font-weight:700;color:'+kararC+';line-height:1.1;margin-bottom:8px">'+karar+'</div>';
   html+='<div style="font-size:11px;color:var(--t2)">'+kararDetail+'</div>';
+  // Puan çubuğu
+  var longPct=Math.round(longScore/maxScore*100);
+  var shortPct=Math.round(shortScore/maxScore*100);
+  var barLong=longScore>0?'<div style="height:4px;background:var(--G);width:'+longPct+'%;border-radius:2px;display:inline-block;margin-right:2px"></div>':'';
+  var barShort=shortScore>0?'<div style="height:4px;background:var(--R);width:'+shortPct+'%;border-radius:2px;display:inline-block"></div>':'';
+  html+='<div style="margin-top:8px;display:flex;align-items:center;gap:6px">';
+  html+='<span style="font-size:9px;color:var(--G);font-family:\'IBM Plex Mono\',monospace">L:'+longScore+'</span>';
+  html+='<div style="flex:1;height:4px;background:var(--dim2);border-radius:2px;position:relative">';
+  if(longScore>0) html+='<div style="position:absolute;left:0;top:0;height:4px;background:var(--G);width:'+longPct+'%;border-radius:2px;transition:width .3s"></div>';
+  html+='</div>';
+  html+='<span style="font-size:9px;font-family:\'IBM Plex Mono\',monospace;color:var(--t2)">'+maxScore+'</span>';
+  html+='<div style="flex:1;height:4px;background:var(--dim2);border-radius:2px;position:relative">';
+  if(shortScore>0) html+='<div style="position:absolute;right:0;top:0;height:4px;background:var(--R);width:'+shortPct+'%;border-radius:2px;transition:width .3s"></div>';
+  html+='</div>';
+  html+='<span style="font-size:9px;color:var(--R);font-family:\'IBM Plex Mono\',monospace">S:'+shortScore+'</span>';
+  html+='</div>';
   // TP/SL - eğer sinyal varsa göster
   if((karar.includes('LONG')||karar.includes('SHORT'))&&sc&&sc.tp){
     var kDir=karar.includes('LONG')?'LONG':'SHORT';
@@ -5686,7 +5753,8 @@ function renMerkez(){
     var dot=k.status==='good'||k.status==='bad'?(k.dir==='LONG'?'▲':k.dir==='SHORT'?'▼':'●'):k.status==='warn'?'◐':'━';
     html+='<div style="background:'+kbg+';border:1px solid '+kbd+';border-radius:10px;padding:10px 12px'+(k.bilgiOnly?';opacity:0.75':'')+';">';
     html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">';
-    html+='<span style="font-size:10px;color:var(--t2)">'+k.icon+' '+k.label+(k.bilgiOnly?' <span style="font-size:7px;background:rgba(255,255,255,.1);padding:1px 4px;border-radius:3px;color:var(--t2)">BİLGİ</span>':'')+'</span>';
+    var kw=WEIGHTS[k.label]||1;
+    html+='<span style="font-size:10px;color:var(--t2)">'+k.icon+' '+k.label+(k.bilgiOnly?' <span style="font-size:7px;background:rgba(255,255,255,.1);padding:1px 4px;border-radius:3px;color:var(--t2)">BİLGİ</span>':' <span style="font-size:7px;color:var(--t2);opacity:.6">×'+kw+'</span>')+'</span>';
     html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:8px;color:'+kc+'">'+dot+'</span>';
     html+='</div>';
     // Fonlama kartı için sayaç özel gösterim
