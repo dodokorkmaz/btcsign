@@ -4164,7 +4164,10 @@ function premiumSignal(){
   }
 
   // OI düşüyorsa iptal
-  if(sig!=='WAIT'&&oiChg!=null&&oiChg<-5){ sig='WAIT'; grade='wait'; gradeLabel='OI DÜŞÜYOR'; }
+  // OI düşüşü SHORT'ta normal — düşüşte longs kaçıyor
+if(sig!=='WAIT'&&oiChg!=null&&oiChg<-5&&sig==='LONG'){ sig='WAIT'; grade='wait'; gradeLabel='OI DÜŞÜYOR'; }
+// OI düşüşü + fiyat düşüşü = SHORT güçlü sinyal
+// (iptal etme, sadece LONG'u iptal et)
 
   var progress=Math.round(activeWeight/maxWeight*100);
   return {sig:sig, grade:grade, gradeLabel:gradeLabel, histWR:histWR,
@@ -5623,6 +5626,34 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   }
   kriterler.push({label:'Fonlama Saati',val:fsVal,status:fsStatus,dir:fsDir,detail:fsDetail,icon:'⏰'});
 
+  // ── MOMENumtum Hız Kriteri (yeni) ──
+  var momVal='--', momStatus='neutral', momDir=null, momDetail='Veri bekleniyor';
+  if(S.c15m&&S.c15m.length>=15&&S.price>0){
+    var momClose=S.c15m[S.c15m.length-1];
+    var momClose15=S.c15m[S.c15m.length-4]||momClose; // 15 dk öncesi (3 mum)
+    var momChg=(momClose-momClose15)/momClose15*100;
+    var momVol=S.v15m?S.v15m[S.v15m.length-1]:0;
+    var momVolAvg=S.v15m?S.v15m.slice(-10).reduce(function(a,b){return a+b;},0)/10:0;
+    var momVolOk=momVolAvg>0&&momVol>=momVolAvg*1.5;
+    momVal=momChg.toFixed(2)+'%';
+    if(momChg<=-0.4&&momVolOk){
+      momStatus='good'; momDir='SHORT';
+      momDetail='Hızlı düşüş '+momVal+' · Hacim '+( momVolOk?'yüksek':'normal');
+    } else if(momChg<=-0.4){
+      momStatus='warn'; momDir='SHORT';
+      momDetail='Düşüş '+momVal+' · Hacim onayı eksik';
+    } else if(momChg>=0.4&&momVolOk){
+      momStatus='good'; momDir='LONG';
+      momDetail='Hızlı yükseliş '+momVal+' · Hacim yüksek';
+    } else if(momChg>=0.4){
+      momStatus='warn'; momDir='LONG';
+      momDetail='Yükseliş '+momVal+' · Hacim onayı eksik';
+    } else {
+      momDetail='Hareket yok · '+momVal;
+    }
+  }
+  kriterler.push({label:'Momentum Hız',val:momVal,status:momStatus,dir:momDir,detail:momDetail,icon:'⚡'});
+
   // ── AĞIRLIK SİSTEMİ + HARD RULE ──
   // Her kritere ağırlık: 15dk-3 saat trade için optimize edilmiş
   var WEIGHTS = {
@@ -5635,7 +5666,8 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
     'OB Duvarı':     1,  // Destek/direnç duvarı
     'Destek/Direnç': 1,  // Teknik seviye
     'ATR/Seans':     1,  // Hareket potansiyeli
-    'Fonlama Saati': 1,  // Zamanlama
+    'Fonlama Saati': 1,
+    'Momentum Hız':  2,  // Hız bazlı momentum - hızlı tetikleyici  // Zamanlama
   };
   // Max puan: 18
 
@@ -5699,14 +5731,14 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   var kararScore = Math.max(longScore, shortScore);
   var scDir=sc?sc.sig:'NEUTRAL';
 
-  if(longScore>=LONG_ENTER&&longBadCount===0&&longHardOk){
+  if(longScore>=LONG_ENTER&&longBadCount<=1&&longHardOk){
     karar='LONG GİR'; kararC='var(--G)'; kararBg='rgba(0,217,126,.08)'; kararBd='rgba(0,217,126,.4)';
     kararDetail='✅ '+longScore+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter · Güçlü LONG';
     if(!S._lastKararTg||S._lastKararTg!=='LONG'||(Date.now()-(S._lastKararTgTs||0))>300000){
       S._lastKararTg='LONG'; S._lastKararTgTs=Date.now();
       tgSend('🟢 <b>KARAR: LONG GİR</b>\n💰 $'+(S.price?Math.round(S.price).toLocaleString('tr-TR'):'--')+'\n📊 Puan: '+longScore+'/'+maxScore+' · '+longActiveGood+'/'+totalK+' kriter\n⏰ '+new Date().toLocaleTimeString('tr-TR'));
     }
-  } else if(shortScore>=SHORT_ENTER&&shortBadCount===0&&shortHardOk){
+  } else if(shortScore>=SHORT_ENTER&&shortBadCount<=1&&shortHardOk){
     karar='SHORT GİR'; kararC='var(--R)'; kararBg='rgba(255,59,92,.08)'; kararBd='rgba(255,59,92,.4)';
     kararDetail='✅ '+shortScore+'/'+maxScore+' puan · '+shortActiveGood+'/'+totalK+' kriter · Güçlü SHORT';
     if(!S._lastKararTg||S._lastKararTg!=='SHORT'||(Date.now()-(S._lastKararTgTs||0))>300000){
