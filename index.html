@@ -617,6 +617,7 @@ var S = {
   lastUpd:null, status:{},
   apiErrCount:0,
   apiErrTs:0,
+  _lastKararTg:null, _lastKararTgTs:0,
   alarms: JSON.parse(localStorage.getItem('btc_alarms_v9') || '[]'),
   btRes:{},
   dynThr:{ longThr:68, shortThr:32, calibrated:false, sampleSize:0, longWR:50, shortWR:50 },
@@ -3391,12 +3392,12 @@ function addAlarm(){
   var price=parseFloat(pEl.value), type=tEl.value;
   if(!price||price<=0){toast('Geçerli fiyat gir'); return;}
   S.alarms.push({id:Date.now(),price:price,type:type,active:true});
-  localStorage.setItem('btc_alarms_v9',JSON.stringify(S.alarms));
+  try{localStorage.setItem('btc_alarms_v9',JSON.stringify(S.alarms));}catch(e){}
   pEl.value=''; renAlarms(); toast('Alarm eklendi');
 }
 function delAlarm(id){
   S.alarms=S.alarms.filter(function(a){return a.id!==id;});
-  localStorage.setItem('btc_alarms_v9',JSON.stringify(S.alarms));
+  try{localStorage.setItem('btc_alarms_v9',JSON.stringify(S.alarms));}catch(e){}
   renAlarms();
 }
 function renAlarms(){
@@ -4726,7 +4727,7 @@ function renTahmin(){
 // ══════════════════════════════════════════════════
 function simSave(){
   var s=S.sim;
-  localStorage.setItem('sim_balance', s.balance.toFixed(2));
+  try{localStorage.setItem('sim_balance', s.balance.toFixed(2));}catch(e){}
   localStorage.setItem('sim_positions', JSON.stringify(s.positions));
   localStorage.setItem('sim_trades', JSON.stringify(s.trades.slice(-100)));
   localStorage.setItem('sim_auto', JSON.stringify(s.autoTrade));
@@ -4926,7 +4927,7 @@ function renSim(){
 // ══════════════════════════════════════════════════
 function logSignal(entry){
   S.signalLog.unshift(entry);
-  if(S.signalLog.length>500) S.signalLog.pop();
+  if(S.signalLog.length>100) S.signalLog.pop();
   try{ localStorage.setItem('signal_log', JSON.stringify(S.signalLog.slice(0,100))); }catch(e){}
   // Pending outcome kaydet — sayfa kapansa bile sonucu takip et
   var pending=JSON.parse(localStorage.getItem('pending_outcomes')||'[]');
@@ -4971,8 +4972,8 @@ function checkPendingOutcomes(){
           od=movedPct<=-tpPct*0.7?'WIN':movedPct>=slPct*0.7?'LOSS':'PARTIAL';
         }
       } else {
-        // TP/SL yoksa genel yön
-        od=movedPct>0.3?'WIN':movedPct<-0.3?'LOSS':'PARTIAL';
+        // TP/SL yoksa ATR bazlı tahmin (%0.5 = 1H ATR yaklaşık)
+        od=movedPct>0.5?'WIN':movedPct<-0.5?'LOSS':'PARTIAL';
       }
       logOutcome(p.ts,od,S.price);
       resolved.push(p.ts);
@@ -5342,7 +5343,8 @@ function renMerkez(){
   var html='';
 
   // ── Tüm motorları hesapla ──
-  var sc=scalpSignal();
+  var sc=(S._cachedScalp&&Date.now()-S._cachedScalpTs<14000)?S._cachedScalp:scalpSignal();
+S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   var ana=(S.c1h&&S.c1h.length>=50)?v9Signal(S.c1h,S.h1h,S.l1h,S.v1h):null;
   var pm=premiumSignal();
   var atrV=(S.c1h&&S.h1h&&S.l1h)?atr(S.h1h.slice(-20),S.l1h.slice(-20),S.c1h.slice(-20)):0;
@@ -5646,7 +5648,8 @@ function renMerkez(){
     var w=WEIGHTS[k.label]||1;
     maxScore+=w;
     if(k.status==='good'&&k.dir==='LONG') longScore+=w;
-    else if((k.status==='good'||k.status==='bad')&&k.dir==='SHORT') shortScore+=w;
+    else if(k.status==='good'&&k.dir==='SHORT') shortScore+=w;
+    // bad kriterler score'a dahil değil — sadece longBadCount/shortBadCount olarak takip ediliyor
   });
 
   // Eski sayaçlar (uyumluluk için)
@@ -5669,16 +5672,17 @@ function renMerkez(){
   var ofTrendConflict=(ofDir2==='LONG'&&trendDir2==='SHORT')||(ofDir2==='SHORT'&&trendDir2==='LONG');
   var conflictReason=ofTrendConflict?'⚡ OF↔Trend çelişkisi':'';
 
-  // LONG: OF en azından nötr + çelişki yok
+  // LONG: OF satış baskısı yoksa + çelişki yok
   var longHardOk=(
     ofKriter&&
-    (ofKriter.dir==='LONG'||(ofKriter.status!=='bad'&&ofKriter.dir!=='SHORT'))&&
+    ofKriter.status!=='bad'&&  // OF kötü değilse
     !ofTrendConflict
   );
-  // SHORT: OF en azından nötr + çelişki yok
+  // SHORT: OF alım baskısı yoksa veya zayıfsa + çelişki yok
   var shortHardOk=(
     ofKriter&&
-    (ofKriter.dir==='SHORT'||(ofKriter.status!=='bad'&&ofKriter.dir!=='LONG'))&&
+    (ofKriter.dir==='SHORT'||ofKriter.dir===null||ofKriter.status==='neutral'||
+     (ofKriter.dir==='LONG'&&ofKriter.status!=='good'))&& // Zayıf alım varsa SHORT'a izin ver
     !ofTrendConflict
   );
 
