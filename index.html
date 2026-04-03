@@ -4581,16 +4581,25 @@ function renTahmin(){
         outcomeDir:null, outcomePct:null, correct:null
       };
       logSignal(logEntry);
-      // 60 dk sonra sonucu kaydet (4 × 15m)
+      // 90 dk sonra TP/SL bazlı sonuç kaydet
       var captureTs=nowTs;
+      var captureTp=Math.round(tp1v);
+      var captureSl=Math.round(slV);
       setTimeout(function(){
         if(!S.price) return;
         var movedPct=(S.price-logEntry.price)/logEntry.price*100;
-        var od=movedPct>0.15?'LONG':movedPct<-0.15?'SHORT':'FLAT';
+        var tpPct=Math.abs(captureTp-logEntry.price)/logEntry.price*100;
+        var slPct=Math.abs(captureSl-logEntry.price)/logEntry.price*100;
+        var od;
+        if(dir==='LONG'){
+          od=movedPct>=tpPct*0.7?'WIN':movedPct<=-slPct*0.7?'LOSS':'PARTIAL';
+        } else {
+          od=movedPct<=-tpPct*0.7?'WIN':movedPct>=slPct*0.7?'LOSS':'PARTIAL';
+        }
         logOutcome(captureTs,od,S.price);
         var lt=document.getElementById('tc-log');
         if(lt&&lt.classList.contains('on')) renLog();
-      },60*60*1000);
+      },90*60*1000);
     }
   }
 
@@ -4921,7 +4930,9 @@ function logSignal(entry){
   try{ localStorage.setItem('signal_log', JSON.stringify(S.signalLog.slice(0,100))); }catch(e){}
   // Pending outcome kaydet — sayfa kapansa bile sonucu takip et
   var pending=JSON.parse(localStorage.getItem('pending_outcomes')||'[]');
-  pending.push({ts:entry.ts, price:entry.price, dir:entry.dir, checkAt:entry.ts+60*60*1000});
+  pending.push({ts:entry.ts, price:entry.price, dir:entry.dir, 
+  tp:entry.tp||null, sl:entry.sl||null,
+  checkAt:entry.ts+90*60*1000}); // 90 dk - TP/SL için yeterli süre
   if(pending.length>100) pending=pending.slice(-100);
   try{ localStorage.setItem('pending_outcomes', JSON.stringify(pending)); }catch(e){}
 }
@@ -4949,7 +4960,20 @@ function checkPendingOutcomes(){
   pending.forEach(function(p){
     if(now>=p.checkAt&&S.price){
       var movedPct=(S.price-p.price)/p.price*100;
-      var od=movedPct>0.15?'LONG':movedPct<-0.15?'SHORT':'FLAT';
+      var od;
+      // TP/SL bazlı gerçek değerlendirme
+      if(p.tp&&p.sl&&p.price){
+        var tpPct=Math.abs(p.tp-p.price)/p.price*100;
+        var slPct=Math.abs(p.sl-p.price)/p.price*100;
+        if(p.dir==='LONG'){
+          od=movedPct>=tpPct*0.7?'WIN':movedPct<=-slPct*0.7?'LOSS':'PARTIAL';
+        } else {
+          od=movedPct<=-tpPct*0.7?'WIN':movedPct>=slPct*0.7?'LOSS':'PARTIAL';
+        }
+      } else {
+        // TP/SL yoksa genel yön
+        od=movedPct>0.3?'WIN':movedPct<-0.3?'LOSS':'PARTIAL';
+      }
       logOutcome(p.ts,od,S.price);
       resolved.push(p.ts);
     }
@@ -5633,26 +5657,38 @@ function renMerkez(){
   var longVotes=aktifKriterler.filter(function(k){return k.dir==='LONG';}).length;
   var shortVotes=aktifKriterler.filter(function(k){return k.dir==='SHORT';}).length;
 
-  // ── HARD RULES — 3 kritik kural ──
-  // Bu 3 kural sağlanmazsa LONG GİR çıkmaz
+  // ── HARD RULES + ÇELİŞKİ TESPİTİ ──
   var ofKriter=aktifKriterler.find(function(k){return k.label==='Order Flow';});
   var trendKriter=aktifKriterler.find(function(k){return k.label==='1H Trend';});
   var scalpKriter=aktifKriterler.find(function(k){return k.label==='Scalp Teyit';});
 
-  // LONG için hard rules
-  var longHardOk = (
-    ofKriter&&(ofKriter.dir==='LONG'||(ofKriter.status!=='bad'&&ofKriter.dir!=='SHORT')) // OF en azından nötr
+  var ofDir2=ofKriter?ofKriter.dir:'NOTR';
+  var trendDir2=trendKriter?trendKriter.dir:'NOTR';
+
+  // Çelişki: OF ile 1H Trend tam zıt yönde → BEKLE
+  var ofTrendConflict=(ofDir2==='LONG'&&trendDir2==='SHORT')||(ofDir2==='SHORT'&&trendDir2==='LONG');
+  var conflictReason=ofTrendConflict?'⚡ OF↔Trend çelişkisi':'';
+
+  // LONG: OF en azından nötr + çelişki yok
+  var longHardOk=(
+    ofKriter&&
+    (ofKriter.dir==='LONG'||(ofKriter.status!=='bad'&&ofKriter.dir!=='SHORT'))&&
+    !ofTrendConflict
   );
-  // SHORT için hard rules
-  var shortHardOk = (
-    ofKriter&&(ofKriter.dir==='SHORT'||(ofKriter.status!=='bad'&&ofKriter.dir!=='LONG'))
+  // SHORT: OF en azından nötr + çelişki yok
+  var shortHardOk=(
+    ofKriter&&
+    (ofKriter.dir==='SHORT'||(ofKriter.status!=='bad'&&ofKriter.dir!=='LONG'))&&
+    !ofTrendConflict
   );
 
-  // Eşikler: maxScore=18, LONG GİR için 10+ puan (%55+)
-  var LONG_ENTER  = 10;
-  var LONG_THINK  = 7;
-  var SHORT_ENTER = 10;
-  var SHORT_THINK = 7;
+  // Eşikler: max 18 puan
+  // LONG GİR: 8+ puan (%44) + hard rule
+  // DÜŞÜNEBİLİRSİN: 6+ puan
+  var LONG_ENTER  = 8;
+  var LONG_THINK  = 6;
+  var SHORT_ENTER = 8;
+  var SHORT_THINK = 6;
 
   var karar='BEKLE', kararC='var(--Y)', kararBg='rgba(251,191,36,.06)', kararBd='rgba(251,191,36,.3)';
   var kararDetail='';
@@ -5688,7 +5724,7 @@ function renMerkez(){
     var proxyWarn='';
     var errCount2=Object.values(S.status).filter(function(v){return v==='err';}).length;
     if(errCount2>=3) proxyWarn=' · ⚠ '+errCount2+' API hatası';
-    kararDetail='L:'+longScore+' S:'+shortScore+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter'+proxyWarn;
+    kararDetail=(conflictReason?conflictReason+' · ':'')+'L:'+longScore+' S:'+shortScore+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter'+proxyWarn;
   }
 
   // ── HTML RENDER ──
