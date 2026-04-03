@@ -5510,17 +5510,20 @@ function renMerkez(){
 
   var karar='BEKLE', kararC='var(--Y)', kararBg='rgba(251,191,36,.06)', kararBd='rgba(251,191,36,.3)';
   var kararDetail='';
+  // confirmed şartı kaldırıldı — 45-60 saniyelik gecikmeye neden oluyordu
+  // 5/10 kriter filtresi yeterince katı, teyit beklemeye gerek yok
+  var scDir=sc?sc.sig:'NEUTRAL'; // Scalp yönü — kriter olarak değil bilgi olarak kullanılıyor
 
-  if(longActiveGood>=5&&longBadCount===0&&longVotes>=5&&confirmed==='LONG'){
+  if(longActiveGood>=5&&longBadCount===0&&longVotes>=5){
     karar='LONG GİR'; kararC='var(--G)'; kararBg='rgba(0,217,126,.08)'; kararBd='rgba(0,217,126,.4)';
     kararDetail='✅ '+longActiveGood+'/'+totalK+' kriter uygun · Güçlü LONG sinyali';
-  } else if(shortActiveGood>=5&&shortBadCount===0&&shortVotes>=5&&confirmed==='SHORT'){
+  } else if(shortActiveGood>=5&&shortBadCount===0&&shortVotes>=5){
     karar='SHORT GİR'; kararC='var(--R)'; kararBg='rgba(255,59,92,.08)'; kararBd='rgba(255,59,92,.4)';
     kararDetail='✅ '+shortActiveGood+'/'+totalK+' kriter SHORT lehine · Güçlü SHORT sinyali';
-  } else if(longActiveGood>=4&&longBadCount<=1&&longVotes>shortVotes&&confirmed==='LONG'){
+  } else if(longActiveGood>=4&&longBadCount<=1&&longVotes>shortVotes){
     karar='LONG DÜŞÜNEBİLİRSİN'; kararC='var(--G)'; kararBg='rgba(0,217,126,.04)'; kararBd='rgba(0,217,126,.25)';
     kararDetail='⚠ '+longActiveGood+'/'+totalK+' kriter uygun · Dikkatli gir';
-  } else if(shortActiveGood>=4&&shortBadCount<=1&&shortVotes>longVotes&&confirmed==='SHORT'){
+  } else if(shortActiveGood>=4&&shortBadCount<=1&&shortVotes>longVotes){
     karar='SHORT DÜŞÜNEBİLİRSİN'; kararC='var(--R)'; kararBg='rgba(255,59,92,.04)'; kararBd='rgba(255,59,92,.25)';
     kararDetail='⚠ '+shortActiveGood+'/'+totalK+' kriter SHORT lehine · Dikkatli gir';
   } else if(longBadCount>=3||shortBadCount>=3){
