@@ -5252,13 +5252,23 @@ async function tgSend(msg){
   } catch(e){}
 }
 function tgSave(){
+  var ti=document.getElementById('tgTokenInput');
+  var ci=document.getElementById('tgChatInput');
+  if(ti) S_TG.token=ti.value.trim();
+  if(ci) S_TG.chatId=ci.value.trim();
   localStorage.setItem('tg_token',S_TG.token);
   localStorage.setItem('tg_chatid',S_TG.chatId);
   toast('Telegram ayarları kaydedildi ✅',2000);
 }
 function tgTest(){
+  // Önce inputtan oku
+  var ti=document.getElementById('tgTokenInput');
+  var ci=document.getElementById('tgChatInput');
+  if(ti&&ti.value.trim()) S_TG.token=ti.value.trim();
+  if(ci&&ci.value.trim()) S_TG.chatId=ci.value.trim();
+  if(!S_TG.token||!S_TG.chatId){ toast('Token ve Chat ID giriniz!',3000); return; }
   tgSend('🔔 <b>BTC Signal Pro</b> bağlantı testi başarılı!\nBot aktif ve sinyal bekleniyor.');
-  toast('Telegram test mesajı gönderildi',3000);
+  toast('Telegram test mesajı gönderildi — Telegram\'ı kontrol et',3000);
 }
 
 function renderAll(){
