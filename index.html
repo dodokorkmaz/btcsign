@@ -4525,13 +4525,16 @@ function renTahmin(){
   var candleWarning=!candleInfo.confirmed;
   // Mum yön eşleşmesi — dir=0 (veri yok) geçemez
   var candleMatch=candleInfo.dir!==0&&((dir==='LONG'&&candleInfo.dir===1)||(dir==='SHORT'&&candleInfo.dir===-1));
-  var hasSignal=(!chopBlock&&dominantPts>=minSignalPts&&dir!=='NÖTR'&&(candleInfo.confirmed?candleMatch:false));
+  // Onaylı sinyal: mum kapandı + yön eşleşti
+  var hasSignal=(!chopBlock&&dominantPts>=minSignalPts&&dir!=='NÖTR'&&candleInfo.confirmed&&candleMatch);
+  // Ön sinyal: puan yeterli + yön net, ama mum henüz kapanmadı (veya kapandı ama yön ters — o da pre olarak göster)
+  var hasPreSignal=(!hasSignal&&!chopBlock&&dominantPts>=minSignalPts&&dir!=='NÖTR'&&!isDeadZone);
   var sigColor=dir==='LONG'?'var(--G)':dir==='SHORT'?'var(--R)':'var(--Y)';
   var sigStrength=dominantPts>=12?'ÇOK GÜÇLÜ':dominantPts>=8?'GÜÇLÜ':dominantPts>=5?'ORTA':'ZAYIF';
 
-  // ── TP / SL ──
+  // ── TP / SL — onaylı veya ön sinyal için hesapla ──
   var tp1v=null,tp2v=null,slV=null;
-  if(hasSignal&&p>0){
+  if((hasSignal||hasPreSignal)&&p>0){
     var slMult=1.0, tp1Mult=1.8, tp2Mult=3.0;
     // Güçlü sinyal = daha geniş TP
     if(dominantPts>=8){tp1Mult=2.2;tp2Mult=4.0;}
@@ -4561,7 +4564,7 @@ function renTahmin(){
   }
   var rr=tp1v&&slV&&p>0?Math.abs(tp1v-p)/Math.abs(slV-p):0;
 
-  // ── OTOMATİK İŞLEM ──
+  // ── OTOMATİK İŞLEM — sadece onaylı sinyalde ──
   if(hasSignal&&tp1v&&slV&&candleInfo.confirmed){
     // dir: LONG/SHORT (Tahmin motoru YUKARI/ASAGI kullanmıyor)
     simAutoTrade(dir, tp1v, slV, dominantPts);
@@ -4610,11 +4613,64 @@ function renTahmin(){
   // ── RENDER ──
   var html='';
 
-  // ── ANA SİNYAL KARTI ──
-  var cardBorder=hasSignal?(dir==='LONG'?'rgba(0,217,126,.4)':'rgba(255,59,92,.4)'):'rgba(251,191,36,.25)';
-  html+='<div style="background:var(--s1);border:1px solid '+cardBorder+';border-radius:14px;padding:20px;margin-bottom:12px;position:relative;overflow:hidden">';
+  // ══ ÖN SİNYAL KARTI (mum kapanmadan önce — hasPreSignal) ══
+  // Sadece hasPreSignal açıksa ve hasSignal yoksa göster
+  if(hasPreSignal&&!hasSignal){
+    var preBorder=dir==='LONG'?'rgba(0,217,126,.25)':'rgba(255,59,92,.25)';
+    var preTopLine=dir==='LONG'?'var(--G)':'var(--R)';
+    html+='<div style="background:var(--s1);border:2px dashed '+preBorder+';border-radius:14px;padding:16px 20px;margin-bottom:12px;position:relative;overflow:hidden">';
+    html+='<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,'+preTopLine+',transparent);opacity:0.5"></div>';
+    html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">';
+    html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:3px;color:var(--t2)">KISA VADE GİRİŞ SİNYALİ · 15M ODAKLI</span>';
+    html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;padding:2px 8px;border-radius:4px;background:rgba(247,147,26,.15);color:var(--O);border:1px solid rgba(247,147,26,.35)">⚡ ÖN SİNYAL</span>';
+    html+='</div>';
+    html+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">';
+    html+='<div>';
+    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:38px;font-weight:700;color:'+sigColor+';line-height:1;opacity:0.75">'+dir+'</div>';
+    html+='<div style="font-size:11px;color:var(--O);margin-top:5px;font-weight:500">⏳ 15m kapanışı bekleniyor — '+candleInfo.remaining+'s kaldı</div>';
+    html+='<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">';
+    html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:2px 8px;border-radius:4px;background:'+sigColor+'15;color:'+sigColor+';border:1px solid '+sigColor+'30">'+sigStrength+'</span>';
+    if(chopBlock) html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(251,191,36,.15);color:var(--Y);border:1px solid rgba(251,191,36,.4)">⚠ CHOP</span>';
+    if(!isLondonNY&&!isDeadZone) html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(251,191,36,.12);color:var(--Y);border:1px solid rgba(251,191,36,.3)">⏰ ASYA — min 7pt</span>';
+    else if(isLondonNY) html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(0,217,126,.08);color:var(--G);border:1px solid rgba(0,217,126,.2)">🏦 LONDRA/NY</span>';
+    if(trend4h!==0){
+      var t4hM=(dir==='LONG'&&trend4h===1)||(dir==='SHORT'&&trend4h===-1);
+      html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:2px 8px;border-radius:4px;background:'+(t4hM?'rgba(0,217,126,.1)':'rgba(255,59,92,.1)')+';color:'+(t4hM?'var(--G)':'var(--R)')+';border:1px solid '+(t4hM?'rgba(0,217,126,.2)':'rgba(255,59,92,.2)')+'">4H '+(trend4h===1?'↑':'↓')+(t4hM?' hizalı':' KARŞI')+'</span>';
+    }
+    html+='</div></div>';
+    html+='<div style="text-align:right">';
+    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:30px;font-weight:700;color:'+sigColor+';opacity:0.75">'+Math.max(bullPts,bearPts)+'/'+maxPts+'</div>';
+    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--t2);margin-top:2px">CONFLUENCE</div>';
+    html+='</div></div>';
+    // TP/SL önizleme (hazırlık için)
+    if(tp1v&&slV){
+      html+='<div style="background:rgba(247,147,26,.05);border:1px solid rgba(247,147,26,.15);border-radius:8px;padding:10px 14px;margin-bottom:10px">';
+      html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--O);margin-bottom:6px;letter-spacing:2px">SEVİYELER (ÖN İZLEME — mum yönüne göre değişebilir)</div>';
+      html+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">';
+      html+='<div style="background:var(--s3);border-radius:6px;padding:8px;text-align:center"><div style="font-size:9px;color:var(--t2);margin-bottom:3px">STOP</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:var(--R)">'+fUSD(slV)+'</div></div>';
+      html+='<div style="background:var(--s3);border-radius:6px;padding:8px;text-align:center"><div style="font-size:9px;color:var(--t2);margin-bottom:3px">GİRİŞ</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:var(--B)">'+fUSD(p)+'</div></div>';
+      html+='<div style="background:var(--s3);border-radius:6px;padding:8px;text-align:center"><div style="font-size:9px;color:var(--t2);margin-bottom:3px">TP1</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:var(--G)">'+fUSD(tp1v)+'</div></div>';
+      html+='<div style="background:var(--s3);border-radius:6px;padding:8px;text-align:center"><div style="font-size:9px;color:var(--t2);margin-bottom:3px">TP2</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:var(--G)">'+fUSD(tp2v)+'</div></div>';
+      html+='</div>';
+      html+='<div style="margin-top:6px;font-size:10px;color:var(--t2)">R:R <b style="color:'+(rr>=2?'var(--G)':rr>=1.5?'var(--Y)':'var(--R)')+'">'+rr.toFixed(1)+':1</b> · ATR-15m: <b style="color:var(--t)">$'+Math.round(atr15)+'</b></div>';
+      html+='</div>';
+    }
+    html+='<div style="font-size:10px;color:var(--t2);padding:8px 10px;background:rgba(247,147,26,.05);border-radius:6px;border-left:3px solid rgba(247,147,26,.4)">';
+    html+='<b style="color:var(--O)">Ön sinyal nedir?</b> Puan yeterli, yön net — ancak 15m mum henüz kapanmadı. ';
+    html+='Mum kapanınca ve yön eşleşirse <b style="color:var(--G)">✅ ONAYLANDI</b> olarak gösterilir. ';
+    html+='Mum tersine dönerse sinyal iptal olur. Kendi kararınla giriş yapabilirsin.';
+    html+='</div>';
+    html+='</div>';
+  }
+
+  // ══ ANA SİNYAL KARTI ══
+  var cardBorder=hasSignal?(dir==='LONG'?'rgba(0,217,126,.5)':'rgba(255,59,92,.5)'):hasPreSignal?'transparent':'rgba(251,191,36,.25)';
+  html+='<div style="background:var(--s1);border:1px solid '+cardBorder+';border-radius:14px;padding:20px;margin-bottom:12px;position:relative;overflow:hidden'+(hasSignal?(dir==='LONG'?';box-shadow:0 0 20px rgba(0,217,126,.06)':';box-shadow:0 0 20px rgba(255,59,92,.06)'):'')+(hasPreSignal?';display:none':'')+'">';
   html+='<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,'+sigColor+',transparent)"></div>';
-  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:3px;color:var(--t2);margin-bottom:10px">KISA VADE GİRİŞ SİNYALİ · 15M ODAKLI</div>';
+  html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">';
+  html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:3px;color:var(--t2)">KISA VADE GİRİŞ SİNYALİ · 15M ODAKLI</span>';
+  if(hasSignal) html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;padding:2px 8px;border-radius:4px;background:rgba(0,217,126,.15);color:var(--G);border:1px solid rgba(0,217,126,.4)">✅ ONAYLANDI</span>';
+  html+='</div>';
 
   html+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">';
   html+='<div>';
@@ -4642,7 +4698,7 @@ function renTahmin(){
   }
   html+='</div></div>';
   html+='<div style="text-align:right">';
-  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:36px;font-weight:700;color:'+sigColor+'">'+Math.max(bullPts,bearPts)+'/19</div>';
+  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:36px;font-weight:700;color:'+sigColor+'">'+Math.max(bullPts,bearPts)+'/'+maxPts+'</div>';
   html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--t2);margin-top:2px">CONFLUENCE</div>';
   html+='</div></div>';
 
@@ -4653,7 +4709,7 @@ function renTahmin(){
   html+='<div style="flex:'+bearPts+';height:6px;background:var(--R);border-radius:0 3px 3px 0;min-width:'+(bearPts>0?'2px':'0')+';transition:flex .4s"></div>';
   html+='</div>';
 
-  // TP/SL seviyeleri
+  // TP/SL seviyeleri — sadece onaylı sinyalde tam göster
   if(hasSignal&&tp1v&&slV){
     html+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">';
     html+='<div style="background:var(--s3);border-radius:8px;padding:10px;text-align:center"><div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--t2);margin-bottom:4px">STOP</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:13px;font-weight:700;color:var(--R)">'+fUSD(slV)+'</div></div>';
