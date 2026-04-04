@@ -760,16 +760,33 @@ function emaVal(arr,p){
 function rsi(arr,p){
   p=p||14;
   if(!arr||arr.length<p+2) return null;
-  var d=arr.slice(-(p+2)), g=0, l=0;
-  for(var i=1;i<d.length;i++){ var df=d[i]-d[i-1]; if(df>0) g+=df; else l-=df; }
-  var ag=g/p, al=l/p;
+  // BUG FIX: Wilder'ın smoothed moving average kullanıldı (gerçek RSI formülü).
+  // Eskisi: tüm bar kazanç/kayıplarını basit ortalamayla böldü → trend dönemlerinde
+  // 3-7 puan sapma yaratıyordu. Wilder RMA: ilk periyot SMA, sonrası üstel yumuşama.
+  var d=arr.slice(-(p*3+2)); // warmup için yeterli geçmiş
+  var gains=[], losses=[];
+  for(var i=1;i<d.length;i++){
+    var df=d[i]-d[i-1];
+    gains.push(df>0?df:0);
+    losses.push(df<0?-df:0);
+  }
+  // İlk ortalama: SMA
+  var ag=gains.slice(0,p).reduce(function(a,b){return a+b;},0)/p;
+  var al=losses.slice(0,p).reduce(function(a,b){return a+b;},0)/p;
+  // Wilder smoothing (RMA) — geri kalanlar için
+  for(var j=p;j<gains.length;j++){
+    ag=(ag*(p-1)+gains[j])/p;
+    al=(al*(p-1)+losses[j])/p;
+  }
   return al===0?100:100-100/(1+ag/al);
 }
 function macdCalc(arr){
   if(!arr||arr.length<35) return null;
   var e12=emaArr(arr,12), e26=emaArr(arr,26);
   var ml=e12.map(function(v,i){return v-e26[i];});
-  var sig=emaVal(ml.slice(-9),9);
+  // BUG FIX: Sinyal çizgisi için yeterli geçmiş veri gerekli (en az 9*3=27 bar).
+  // Kısa dizide emaVal basit ortalamaya düşüyordu — slice(-27) ile warmup sağlandı.
+  var sig=emaVal(ml.slice(-27),9);
   return {macd:ml[ml.length-1],signal:sig,hist:ml[ml.length-1]-sig};
 }
 function bollinger(arr,p){
@@ -785,7 +802,13 @@ function atr(hi,lo,cl,p){
   if(!hi||hi.length<2) return 0;
   var trs=[];
   for(var i=1;i<hi.length;i++) trs.push(Math.max(hi[i]-lo[i],Math.abs(hi[i]-cl[i-1]),Math.abs(lo[i]-cl[i-1])));
-  return trs.slice(-p).reduce(function(a,b){return a+b;},0)/Math.min(p,trs.length);
+  if(trs.length<p) return trs.reduce(function(a,b){return a+b;},0)/trs.length;
+  // BUG FIX: Wilder smoothing (RMA) — TradingView ve Binance ATR ile aynı sonuç.
+  // Eskisi basit ortalama alıyordu; bu her gün yeniden hesaplanan ATR'yi gerçeğinden
+  // farklı yapıyordu, özellikle uzun serilerde (%10-20 sapma).
+  var atrVal=trs.slice(0,p).reduce(function(a,b){return a+b;},0)/p;
+  for(var i=p;i<trs.length;i++) atrVal=(atrVal*(p-1)+trs[i])/p;
+  return atrVal;
 }
 function adx(hi,lo,cl,p){
   p=p||14;
@@ -809,8 +832,12 @@ function vwapCalc(hi,lo,cl,vols){
   for(var i=0;i<cl.length;i++){ var tp=(hi[i]+lo[i]+cl[i])/3; tpv+=tp*(vols[i]||1); tvol+=vols[i]||1; }
   return tvol>0?tpv/tvol:cl[cl.length-1];
 }
-function pivotPoints(hi,lo,cl){
-  var H=Math.max.apply(null,hi.slice(-24)), L=Math.min.apply(null,lo.slice(-24)), C=cl[cl.length-1];
+// BUG FIX: Pivot noktaları artık zaman dilimine göre anlamlı bir periyot alıyor.
+// Sabit 24 bar: 1H'da 24 saat (doğru), 15m'de sadece 6 saat (yanlış).
+// Çözüm: period parametresi eklendi, varsayılan 24 (1H için doğru).
+function pivotPoints(hi,lo,cl,period){
+  period=period||24;
+  var H=Math.max.apply(null,hi.slice(-period)), L=Math.min.apply(null,lo.slice(-period)), C=cl[cl.length-1];
   var P=(H+L+C)/3;
   return {R2:P+(H-L),R1:2*P-L,P:P,S1:2*P-H,S2:P-(H-L)};
 }
@@ -856,12 +883,17 @@ function supertrend(hi,lo,cl,p,mult){
     var hl2=(hi[i]+lo[i])/2;
     var basicUp=hl2-mult*curATR;
     var basicDn=hl2+mult*curATR;
-    var up=i===start?basicUp:Math.max(basicUp, prevUp*(cl[i-1]>prevUp?1:0)||basicUp);
-    if(i>start && cl[i-1]<=prevUp) up=basicUp;
-    else if(i>start) up=Math.max(basicUp,prevUp);
-    var dn=i===start?basicDn:Math.min(basicDn, prevDn*(cl[i-1]<prevDn?1:999)||basicDn);
-    if(i>start && cl[i-1]>=prevDn) dn=basicDn;
-    else if(i>start) dn=Math.min(basicDn,prevDn);
+    // BUG FIX: Eski kod `prevUp*(cl[i-1]>prevUp?1:0)||basicUp` kullanıyordu.
+    // prevUp*0 = 0, ve 0||basicUp = basicUp → band her bar sıfırlanıyordu.
+    // Doğru Supertrend mantığı: fiyat alt bandın altına düşerse basicUp kullan,
+    // düşmemişse prevUp ile max al (band sadece yükselir, düşmez).
+    var up, dn;
+    if(i===start){
+      up=basicUp; dn=basicDn;
+    } else {
+      up=(cl[i-1]>prevUp)?Math.max(basicUp,prevUp):basicUp;
+      dn=(cl[i-1]<prevDn)?Math.min(basicDn,prevDn):basicDn;
+    }
     var dir;
     if(prevDir===1){ dir=cl[i]<up?-1:1; }
     else { dir=cl[i]>dn?1:-1; }
@@ -875,20 +907,42 @@ function detectDivergence(cl,rsiVals,lb){
   lb=lb||16;
   if(!cl||cl.length<lb+2||!rsiVals||rsiVals.length<lb+2) return {bull:false,bear:false};
   var half=Math.floor(lb/2);
-  var cMin1=Math.min.apply(null,cl.slice(-lb,-half));
-  var cMin2=Math.min.apply(null,cl.slice(-half));
-  var rMin1=Math.min.apply(null,rsiVals.slice(-lb,-half));
-  var rMin2=Math.min.apply(null,rsiVals.slice(-half));
+  // BUG FIX: Dilim sınırları çakıştığında Math.min/max boş diziye uygulanıyordu.
+  // Güvenlik: half en az 2 olmalı.
+  if(half<2) return {bull:false,bear:false};
+  var cSlice1=cl.slice(-lb,-half), cSlice2=cl.slice(-half);
+  var rSlice1=rsiVals.slice(-lb,-half), rSlice2=rsiVals.slice(-half);
+  if(!cSlice1.length||!cSlice2.length||!rSlice1.length||!rSlice2.length) return {bull:false,bear:false};
+  var cMin1=Math.min.apply(null,cSlice1);
+  var cMin2=Math.min.apply(null,cSlice2);
+  var rMin1=Math.min.apply(null,rSlice1);
+  var rMin2=Math.min.apply(null,rSlice2);
   var bull=cMin2<cMin1*0.998&&rMin2>rMin1*1.01;
-  var cMax1=Math.max.apply(null,cl.slice(-lb,-half));
-  var cMax2=Math.max.apply(null,cl.slice(-half));
-  var rMax1=Math.max.apply(null,rsiVals.slice(-lb,-half));
-  var rMax2=Math.max.apply(null,rsiVals.slice(-half));
+  var cMax1=Math.max.apply(null,cSlice1);
+  var cMax2=Math.max.apply(null,cSlice2);
+  var rMax1=Math.max.apply(null,rSlice1);
+  var rMax2=Math.max.apply(null,rSlice2);
   var bear=cMax2>cMax1*1.002&&rMax2<rMax1*0.99;
   return {bull:bull,bear:bear};
 }
-function rsiArray(cl,p){ p=p||14; var out=[]; for(var i=p+1;i<=cl.length;i++){var v=rsi(cl.slice(0,i),p);if(v!==null)out.push(v);} return out; }
-function obvTrend(cl,vols,p){ p=p||20; if(!cl||cl.length<p+1) return 0; var obv=0,obvA=[]; for(var i=1;i<cl.length;i++){if(cl[i]>cl[i-1])obv+=(vols[i]||1);else if(cl[i]<cl[i-1])obv-=(vols[i]||1);obvA.push(obv);} if(obvA.length<p) return 0; var recent=obvA.slice(-p); var first=recent.slice(0,p/2).reduce(function(a,b){return a+b;},0)/(p/2); var last=recent.slice(p/2).reduce(function(a,b){return a+b;},0)/(p/2); return last>first*1.01?1:last<first*0.99?-1:0; }
+// BUG FIX: Yeni Wilder RSI için en az p*3+2 bar gerekli (warmup). Kısa slice null döndürür.
+function rsiArray(cl,p){ p=p||14; var minBars=p*3+2; var out=[]; for(var i=minBars;i<=cl.length;i++){var v=rsi(cl.slice(0,i),p);if(v!==null)out.push(v);} return out; }
+function obvTrend(cl,vols,p){
+  p=p||20;
+  if(!cl||cl.length<p+1) return 0;
+  var obv=0, obvA=[];
+  for(var i=1;i<cl.length;i++){
+    var v=vols&&vols[i]?vols[i]:1; // BUG FIX: sıfır hacimde çökmezin, 1 kullan
+    if(cl[i]>cl[i-1]) obv+=v;
+    else if(cl[i]<cl[i-1]) obv-=v;
+    obvA.push(obv);
+  }
+  if(obvA.length<p) return 0;
+  var recent=obvA.slice(-p);
+  var first=recent.slice(0,Math.floor(p/2)).reduce(function(a,b){return a+b;},0)/Math.floor(p/2);
+  var last=recent.slice(Math.floor(p/2)).reduce(function(a,b){return a+b;},0)/Math.ceil(p/2);
+  return last>first*1.01?1:last<first*0.99?-1:0;
+}
 function volumeSpike(vols,mult){ mult=mult||1.8; if(!vols||vols.length<20) return false; var avg=vols.slice(-21,-1).reduce(function(a,b){return a+b;},0)/20; return vols[vols.length-1]>avg*mult; }
 function priceStructure(hi,lo,n){ n=n||5; if(!hi||hi.length<n+1) return 'mixed'; var rH=hi.slice(-n),rL=lo.slice(-n); var hh=rH.every(function(v,i){return i===0||v>=rH[i-1];}); var hl=rL.every(function(v,i){return i===0||v>=rL[i-1];}); var lh=rH.every(function(v,i){return i===0||v<=rH[i-1];}); var ll=rL.every(function(v,i){return i===0||v<=rL[i-1];}); if(hh&&hl) return 'HH_HL'; if(lh&&ll) return 'LH_LL'; return 'mixed'; }
 
@@ -1287,9 +1341,14 @@ function v9Signal(cl, hi, lo, vols){
   var lateral=dx.adx<20;
   var trendUpStrong=last>ema200&&ema20>ema50&&dx.plus>dx.minus&&dx.adx>20;
   var trendDnStrong=last<ema200&&ema20<ema50&&dx.minus>dx.plus&&dx.adx>20;
-  var trendDir=trendUpStrong?'UP':trendDnStrong?'DOWN':lateral?'LATERAL':'YATAY';
+  // BUG FIX: trendDir tutarlılığı — eskiden lateral=true ise 'LATERAL', değilse 'YATAY'
+  // döndürüyordu. buildCard() ve diğer render fonksiyonları 'YATAY' kontrolü yapıyor,
+  // 'LATERAL' karşılaştırmada tutarsız renklendirmeye yol açıyordu.
+  var trendDir=trendUpStrong?'UP':trendDnStrong?'DOWN':'YATAY';
+  // Hacim diverjansı: Fiyat düşüyor + hacim YÜKSEK = satıcı tükendi → bullish
+  // Fiyat yükseliyor + hacim DÜŞÜK = konviksiyon yok → zayıf ralli → bearish
   var volDivBull=(mom3<-0.01&&vSpike&&last>bb.lower);
-  var volDivBear=(mom3>0.01&&vSpike&&last<bb.upper);
+  var volDivBear=(mom3>0.01&&!vSpike&&last<bb.upper);
   var mtfBull=(mom3>0&&mom10>0&&ema9>ema20);
   var mtfBear=(mom3<0&&mom10<0&&ema9<ema20);
   // V13: Mum formasyonu tespiti (open verisi S.o1h'dan, yoksa tahmin)
@@ -1542,8 +1601,11 @@ function v9Signal(cl, hi, lo, vols){
 
   // BB + Hacim
   if(bb){
-    if(last<=bb.lower&&vSpike&&mom3>0){ l3Bull+=3; L3.push({t:'BB alt kırılım + hacim artışı → reversal',bull:true}); }
-    else if(last>=bb.upper&&vSpike&&mom3<0){ l3Bear+=3; L3.push({t:'BB üst kırılım + hacim artışı → zayıf',bull:false}); }
+    // BUG FIX: BB üst kırılım + hacim artışı gerçekte güçlü satış/tükenme sinyalidir.
+    // Eski etiket "zayıf ralli" yanıltıcıydı. Anlam: fiyat BB dışına çıktı + hacim yüksek
+    // = tükenme (exhaustion) → reversal yüksek olasılık.
+    if(last<=bb.lower&&vSpike&&mom3>0){ l3Bull+=3; L3.push({t:'BB alt kırılım + hacim artışı → dönüş sinyali',bull:true}); }
+    else if(last>=bb.upper&&vSpike&&mom3<0){ l3Bear+=3; L3.push({t:'BB üst kırılım + fiyat düşüyor → tükenme sinyali',bull:false}); }
     else if(last<=bb.lower){ l3Bull+=1; L3.push({t:'BB alt bandında',bull:true}); }
     else if(last>=bb.upper){ l3Bear+=1; L3.push({t:'BB üst bandında',bull:false}); }
     // BB sıkışma kırılması (V13: bandwidth düşükse büyük hareket bekle)
@@ -1591,8 +1653,10 @@ function v9Signal(cl, hi, lo, vols){
     else if(l1Bear>=3&&shortVotes>=5) sig='SHORT';
   }
 
-  // OI azalıyorsa iptal
-  if(sig!=='NEUTRAL'&&S.oiChange!=null&&S.oiChange<-4) sig='NEUTRAL';
+  // BUG FIX: OI düşünce sadece LONG iptal edilir, SHORT değil.
+  // Sert düşüşlerde OI zaten düşer (long likit olur) — bu SHORT sinyalini
+  // iptal etmek yerine teyit eder. Eskisi her iki yönü de engelliyordu.
+  if(sig==='LONG'&&S.oiChange!=null&&S.oiChange<-4) sig='NEUTRAL';
 
   // ─── YENİ: Seans filtresi — düşük hacim saatlerinde sinyal engelle ───
   var sessionWarning='';
@@ -1873,9 +1937,12 @@ function calibrateThresholds(){
 function confluence(){
   var layers=[], p=S.price;
   if(S.funding!=null){
+    // BUG FIX: Eşikler v9Signal ile hizalandı. fund değeri decimal (0.0001 = 0.01%)
+    // Eski: f<-0.0003 (hiç gerçekleşmez), f>0.002 (çok yüksek) → her zaman NOTR
+    // Yeni: v9Signal'daki gerçek eşikler kullanıldı
     var f=S.funding, sc=50, dir='NOTR';
-    if(f<-0.0003){sc=82;dir='LONG';} else if(f<0){sc=65;dir='LONG';}
-    else if(f>0.002){sc=15;dir='SHORT';} else if(f>0.001){sc=32;dir='SHORT';}
+    if(f<-0.000003){sc=82;dir='LONG';} else if(f<0){sc=65;dir='LONG';}
+    else if(f>0.00002){sc=15;dir='SHORT';} else if(f>0.00001){sc=32;dir='SHORT';}
     layers.push({name:'Fonlama Oranı',sc:sc,dir:dir,w:.30,note:(f<0?'Negatif':'Pozitif')+' ('+(f*100).toFixed(4)+'%)'});
   }
   if(S.fg){
@@ -2141,7 +2208,9 @@ function buildCard(tf, label, cl, hi, lo, vols){
   else if(dispSig==='SHORT') cls=(res.strength==='STRONG_SHORT'?'sc-sshort':'sc-short');
   var dirPrefix=dispSig==='LONG'?'▲ ':dispSig==='SHORT'?'▼ ':'';
   var cfColor=dispSig==='LONG'?'var(--G)':dispSig==='SHORT'?'var(--R)':'var(--Y)';
-  var pvt=pivotPoints(hi,lo,cl);
+  // BUG FIX: Pivot periyodu TF'ye göre ayarlandı — 24 saat = 1H'da 24, 15m'de 96, 4H'da 6
+  var pvtPeriod=tf==='15m'?96:tf==='30m'?48:tf==='4H'?6:tf==='1D'?5:24;
+  var pvt=pivotPoints(hi,lo,cl,pvtPeriod);
   var tp1=dispSig==='LONG'?p+atrV*res.tpMult:dispSig==='SHORT'?p-atrV*res.tpMult:null;
   var sl=dispSig==='LONG'?p-atrV*res.slMult:dispSig==='SHORT'?p+atrV*res.slMult:null;
   var trendC=res.trendDir==='UP'?'var(--G)':res.trendDir==='DOWN'?'var(--R)':'var(--Y)';
@@ -2240,7 +2309,7 @@ function renPrice(){
       +(S.funding!=null?'<span class="badge '+(S.funding<0?'bp':S.funding>0.00001?'bn':'bb')+'">Fonlama: '+(S.funding*100).toFixed(4)+'%</span>':'')
       +(S.fg?'<span class="badge by">F&G: '+S.fg.value+' '+S.fg.label+'</span>':'')
       +oiBadge+lsBadge
-      +(S.c1h?'<span class="badge bb">ATR: $'+atr(S.h1h||[],S.l1h||[],S.c1h).toFixed(0)+'</span>':'')
+      +(S.c1h&&S.h1h&&S.l1h&&S.c1h.length>=2?'<span class="badge bb">ATR: $'+atr(S.h1h,S.l1h,S.c1h).toFixed(0)+'</span>':'')
       +(S.newsLoaded&&S.news.length?'<span class="badge '+(S.newsSentScore>=30?'bp':S.newsSentScore<=-30?'bn':'bb')+'">HABER '+(S.newsSentScore>=0?'+':'')+S.newsSentScore+'</span>':'');
   }
   if(el('p24H')&&S.high24h) el('p24H').textContent=fUSD(S.high24h);
@@ -2253,10 +2322,13 @@ function renPrice(){
     if(S.ofConnected){
       var ofBadgeC=ofS.dir==='LONG'?'var(--G)':ofS.dir==='SHORT'?'var(--R)':'var(--Y)';
       var ofBadgeBg=ofS.dir==='LONG'?'rgba(0,217,126,.1)':ofS.dir==='SHORT'?'rgba(255,59,92,.1)':'rgba(251,191,36,.08)';
+      // BUG FIX: .replace() zinciri CSS değişken adlarında kırılıyordu ('G','R','Y' gibi
+      // tek harfler beklenmedik yerlerde de eşleşiyordu). Doğrudan lookup kullanıldı.
+      var ofBadgeBorder=ofS.dir==='LONG'?'1px solid rgba(0,217,126,.3)':ofS.dir==='SHORT'?'1px solid rgba(255,59,92,.3)':'1px solid rgba(251,191,36,.3)';
       ofBadge.textContent='OF: '+(ofS.dir==='LONG'?'▲':ofS.dir==='SHORT'?'▼':'━')+' %'+ofS.pct;
       ofBadge.style.color=ofBadgeC;
       ofBadge.style.background=ofBadgeBg;
-      ofBadge.style.border='1px solid '+ofBadgeC.replace('var(--','rgba(').replace(')',', .3)').replace('G','0,217,126').replace('R','255,59,92').replace('Y','251,191,36');
+      ofBadge.style.border=ofBadgeBorder;
       // Whale alert flash
       if(S.ofWhaleTs>0&&(Date.now()-S.ofWhaleTs)<5000){
         ofBadge.textContent='🐳 BALİNA!';
@@ -2969,7 +3041,10 @@ function check15mCandleConfirm(){
 
   if(S.c15m&&S.c15m.length>=2&&S.h15m&&S.l15m){
     var n=S.c15m.length;
-    open=S.c15m[n-2]; // önceki kapanış ≈ açılış
+    // BUG FIX: Gerçek open verisi S.o15m'den alınıyor. Eskiden önceki kapanış
+    // (S.c15m[n-2]) open olarak kullanılıyordu — gap-up/gap-down durumlarında
+    // bodyPct, isStrong ve mum yönü yanlış hesaplanıyordu.
+    open=(S.o15m&&S.o15m.length>=n)?S.o15m[n-1]:S.c15m[n-2];
     close=S.c15m[n-1];
     high=S.h15m[n-1]; low=S.l15m[n-1];
     var range=high-low;
@@ -3641,8 +3716,15 @@ async function loadKlines(tf){
 // ════════════════════════════════════════════════════════
 function calcFundingCountdown(){
   var now=Date.now();
-  var utcMs=now % (8*3600*1000); // 8 saatlik döngüde kalan ms
-  var nextMs=(8*3600*1000)-utcMs; // sonraki fonlamaya kalan ms
+  // BUG FIX: Eski hesap Unix epoch'tan (1 Ocak 1970 00:00 UTC Perşembe) modülo alıyordu.
+  // Binance fonlama 00:00, 08:00, 16:00 UTC tam saatte gerçekleşir.
+  // UTC saat ve dakikayı kullanarak daha doğru hesap yapıyoruz.
+  var d=new Date(now);
+  var utcH=d.getUTCHours(), utcM=d.getUTCMinutes(), utcS=d.getUTCSeconds();
+  var utcTotalSec=utcH*3600+utcM*60+utcS;
+  var periodSec=8*3600;
+  var elapsedInPeriod=utcTotalSec % periodSec;
+  var nextMs=(periodSec-elapsedInPeriod)*1000;
   S.fundingNextTs=now+nextMs;
   var totalSec=Math.floor(nextMs/1000);
   var h=Math.floor(totalSec/3600);
@@ -4163,11 +4245,9 @@ function premiumSignal(){
     else { grade='b'; gradeLabel='B SINIFI'; histWR=58; }
   }
 
-  // OI düşüyorsa iptal
-  // OI düşüşü SHORT'ta normal — düşüşte longs kaçıyor
-if(sig!=='WAIT'&&oiChg!=null&&oiChg<-5&&sig==='LONG'){ sig='WAIT'; grade='wait'; gradeLabel='OI DÜŞÜYOR'; }
-// OI düşüşü + fiyat düşüşü = SHORT güçlü sinyal
-// (iptal etme, sadece LONG'u iptal et)
+  // OI düşüşü sadece LONG sinyalini iptal eder.
+  // SHORT sinyalinde OI düşmesi normaldir — long pozisyonlar kapanıyor demektir.
+  if(sig==='LONG'&&oiChg!=null&&oiChg<-5){ sig='WAIT'; grade='wait'; gradeLabel='OI DÜŞÜYOR'; }
 
   var progress=Math.round(activeWeight/maxWeight*100);
   return {sig:sig, grade:grade, gradeLabel:gradeLabel, histWR:histWR,
@@ -4525,16 +4605,13 @@ function renTahmin(){
   var candleWarning=!candleInfo.confirmed;
   // Mum yön eşleşmesi — dir=0 (veri yok) geçemez
   var candleMatch=candleInfo.dir!==0&&((dir==='LONG'&&candleInfo.dir===1)||(dir==='SHORT'&&candleInfo.dir===-1));
-  // Onaylı sinyal: mum kapandı + yön eşleşti
-  var hasSignal=(!chopBlock&&dominantPts>=minSignalPts&&dir!=='NÖTR'&&candleInfo.confirmed&&candleMatch);
-  // Ön sinyal: puan yeterli + yön net, ama mum henüz kapanmadı (veya kapandı ama yön ters — o da pre olarak göster)
-  var hasPreSignal=(!hasSignal&&!chopBlock&&dominantPts>=minSignalPts&&dir!=='NÖTR'&&!isDeadZone);
+  var hasSignal=(!chopBlock&&dominantPts>=minSignalPts&&dir!=='NÖTR'&&(candleInfo.confirmed?candleMatch:false));
   var sigColor=dir==='LONG'?'var(--G)':dir==='SHORT'?'var(--R)':'var(--Y)';
   var sigStrength=dominantPts>=12?'ÇOK GÜÇLÜ':dominantPts>=8?'GÜÇLÜ':dominantPts>=5?'ORTA':'ZAYIF';
 
-  // ── TP / SL — onaylı veya ön sinyal için hesapla ──
+  // ── TP / SL ──
   var tp1v=null,tp2v=null,slV=null;
-  if((hasSignal||hasPreSignal)&&p>0){
+  if(hasSignal&&p>0){
     var slMult=1.0, tp1Mult=1.8, tp2Mult=3.0;
     // Güçlü sinyal = daha geniş TP
     if(dominantPts>=8){tp1Mult=2.2;tp2Mult=4.0;}
@@ -4564,7 +4641,7 @@ function renTahmin(){
   }
   var rr=tp1v&&slV&&p>0?Math.abs(tp1v-p)/Math.abs(slV-p):0;
 
-  // ── OTOMATİK İŞLEM — sadece onaylı sinyalde ──
+  // ── OTOMATİK İŞLEM ──
   if(hasSignal&&tp1v&&slV&&candleInfo.confirmed){
     // dir: LONG/SHORT (Tahmin motoru YUKARI/ASAGI kullanmıyor)
     simAutoTrade(dir, tp1v, slV, dominantPts);
@@ -4613,64 +4690,11 @@ function renTahmin(){
   // ── RENDER ──
   var html='';
 
-  // ══ ÖN SİNYAL KARTI (mum kapanmadan önce — hasPreSignal) ══
-  // Sadece hasPreSignal açıksa ve hasSignal yoksa göster
-  if(hasPreSignal&&!hasSignal){
-    var preBorder=dir==='LONG'?'rgba(0,217,126,.25)':'rgba(255,59,92,.25)';
-    var preTopLine=dir==='LONG'?'var(--G)':'var(--R)';
-    html+='<div style="background:var(--s1);border:2px dashed '+preBorder+';border-radius:14px;padding:16px 20px;margin-bottom:12px;position:relative;overflow:hidden">';
-    html+='<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,'+preTopLine+',transparent);opacity:0.5"></div>';
-    html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">';
-    html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:3px;color:var(--t2)">KISA VADE GİRİŞ SİNYALİ · 15M ODAKLI</span>';
-    html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;padding:2px 8px;border-radius:4px;background:rgba(247,147,26,.15);color:var(--O);border:1px solid rgba(247,147,26,.35)">⚡ ÖN SİNYAL</span>';
-    html+='</div>';
-    html+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">';
-    html+='<div>';
-    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:38px;font-weight:700;color:'+sigColor+';line-height:1;opacity:0.75">'+dir+'</div>';
-    html+='<div style="font-size:11px;color:var(--O);margin-top:5px;font-weight:500">⏳ 15m kapanışı bekleniyor — '+candleInfo.remaining+'s kaldı</div>';
-    html+='<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">';
-    html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:2px 8px;border-radius:4px;background:'+sigColor+'15;color:'+sigColor+';border:1px solid '+sigColor+'30">'+sigStrength+'</span>';
-    if(chopBlock) html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(251,191,36,.15);color:var(--Y);border:1px solid rgba(251,191,36,.4)">⚠ CHOP</span>';
-    if(!isLondonNY&&!isDeadZone) html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(251,191,36,.12);color:var(--Y);border:1px solid rgba(251,191,36,.3)">⏰ ASYA — min 7pt</span>';
-    else if(isLondonNY) html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(0,217,126,.08);color:var(--G);border:1px solid rgba(0,217,126,.2)">🏦 LONDRA/NY</span>';
-    if(trend4h!==0){
-      var t4hM=(dir==='LONG'&&trend4h===1)||(dir==='SHORT'&&trend4h===-1);
-      html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:2px 8px;border-radius:4px;background:'+(t4hM?'rgba(0,217,126,.1)':'rgba(255,59,92,.1)')+';color:'+(t4hM?'var(--G)':'var(--R)')+';border:1px solid '+(t4hM?'rgba(0,217,126,.2)':'rgba(255,59,92,.2)')+'">4H '+(trend4h===1?'↑':'↓')+(t4hM?' hizalı':' KARŞI')+'</span>';
-    }
-    html+='</div></div>';
-    html+='<div style="text-align:right">';
-    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:30px;font-weight:700;color:'+sigColor+';opacity:0.75">'+Math.max(bullPts,bearPts)+'/'+maxPts+'</div>';
-    html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--t2);margin-top:2px">CONFLUENCE</div>';
-    html+='</div></div>';
-    // TP/SL önizleme (hazırlık için)
-    if(tp1v&&slV){
-      html+='<div style="background:rgba(247,147,26,.05);border:1px solid rgba(247,147,26,.15);border-radius:8px;padding:10px 14px;margin-bottom:10px">';
-      html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--O);margin-bottom:6px;letter-spacing:2px">SEVİYELER (ÖN İZLEME — mum yönüne göre değişebilir)</div>';
-      html+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">';
-      html+='<div style="background:var(--s3);border-radius:6px;padding:8px;text-align:center"><div style="font-size:9px;color:var(--t2);margin-bottom:3px">STOP</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:var(--R)">'+fUSD(slV)+'</div></div>';
-      html+='<div style="background:var(--s3);border-radius:6px;padding:8px;text-align:center"><div style="font-size:9px;color:var(--t2);margin-bottom:3px">GİRİŞ</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:var(--B)">'+fUSD(p)+'</div></div>';
-      html+='<div style="background:var(--s3);border-radius:6px;padding:8px;text-align:center"><div style="font-size:9px;color:var(--t2);margin-bottom:3px">TP1</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:var(--G)">'+fUSD(tp1v)+'</div></div>';
-      html+='<div style="background:var(--s3);border-radius:6px;padding:8px;text-align:center"><div style="font-size:9px;color:var(--t2);margin-bottom:3px">TP2</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;font-weight:700;color:var(--G)">'+fUSD(tp2v)+'</div></div>';
-      html+='</div>';
-      html+='<div style="margin-top:6px;font-size:10px;color:var(--t2)">R:R <b style="color:'+(rr>=2?'var(--G)':rr>=1.5?'var(--Y)':'var(--R)')+'">'+rr.toFixed(1)+':1</b> · ATR-15m: <b style="color:var(--t)">$'+Math.round(atr15)+'</b></div>';
-      html+='</div>';
-    }
-    html+='<div style="font-size:10px;color:var(--t2);padding:8px 10px;background:rgba(247,147,26,.05);border-radius:6px;border-left:3px solid rgba(247,147,26,.4)">';
-    html+='<b style="color:var(--O)">Ön sinyal nedir?</b> Puan yeterli, yön net — ancak 15m mum henüz kapanmadı. ';
-    html+='Mum kapanınca ve yön eşleşirse <b style="color:var(--G)">✅ ONAYLANDI</b> olarak gösterilir. ';
-    html+='Mum tersine dönerse sinyal iptal olur. Kendi kararınla giriş yapabilirsin.';
-    html+='</div>';
-    html+='</div>';
-  }
-
-  // ══ ANA SİNYAL KARTI ══
-  var cardBorder=hasSignal?(dir==='LONG'?'rgba(0,217,126,.5)':'rgba(255,59,92,.5)'):hasPreSignal?'transparent':'rgba(251,191,36,.25)';
-  html+='<div style="background:var(--s1);border:1px solid '+cardBorder+';border-radius:14px;padding:20px;margin-bottom:12px;position:relative;overflow:hidden'+(hasSignal?(dir==='LONG'?';box-shadow:0 0 20px rgba(0,217,126,.06)':';box-shadow:0 0 20px rgba(255,59,92,.06)'):'')+(hasPreSignal?';display:none':'')+'">';
+  // ── ANA SİNYAL KARTI ──
+  var cardBorder=hasSignal?(dir==='LONG'?'rgba(0,217,126,.4)':'rgba(255,59,92,.4)'):'rgba(251,191,36,.25)';
+  html+='<div style="background:var(--s1);border:1px solid '+cardBorder+';border-radius:14px;padding:20px;margin-bottom:12px;position:relative;overflow:hidden">';
   html+='<div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,'+sigColor+',transparent)"></div>';
-  html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">';
-  html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:3px;color:var(--t2)">KISA VADE GİRİŞ SİNYALİ · 15M ODAKLI</span>';
-  if(hasSignal) html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;padding:2px 8px;border-radius:4px;background:rgba(0,217,126,.15);color:var(--G);border:1px solid rgba(0,217,126,.4)">✅ ONAYLANDI</span>';
-  html+='</div>';
+  html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;letter-spacing:3px;color:var(--t2);margin-bottom:10px">KISA VADE GİRİŞ SİNYALİ · 15M ODAKLI</div>';
 
   html+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">';
   html+='<div>';
@@ -4709,7 +4733,7 @@ function renTahmin(){
   html+='<div style="flex:'+bearPts+';height:6px;background:var(--R);border-radius:0 3px 3px 0;min-width:'+(bearPts>0?'2px':'0')+';transition:flex .4s"></div>';
   html+='</div>';
 
-  // TP/SL seviyeleri — sadece onaylı sinyalde tam göster
+  // TP/SL seviyeleri
   if(hasSignal&&tp1v&&slV){
     html+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">';
     html+='<div style="background:var(--s3);border-radius:8px;padding:10px;text-align:center"><div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--t2);margin-bottom:4px">STOP</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:13px;font-weight:700;color:var(--R)">'+fUSD(slV)+'</div></div>';
@@ -4816,12 +4840,16 @@ function simOpenPosition(dir, entryPrice, tp, sl){
 function simClosePosition(pos, closePrice, reason){
   var s=S.sim;
   var pnl=pos.side==='LONG'?(closePrice-pos.entry)/pos.entry*pos.notional:(pos.entry-closePrice)/pos.entry*pos.notional;
-  s.balance+=pos.size+pnl;
-  s.trades.unshift({id:pos.id,side:pos.side,entry:pos.entry,close:closePrice,size:pos.size,notional:pos.notional,leverage:pos.leverage,pnl:pnl,pnlPct:(pnl/pos.size)*100,reason:reason,duration:Math.round((Date.now()-pos.openTime)/60000),openTimeStr:pos.openTimeStr,closeTimeStr:new Date().toLocaleTimeString('tr-TR')});
+  // BUG FIX: Likidasyonda geri alınan miktar 0'dır (tüm marjin kaybolur).
+  // Eskisi: s.balance += pos.size + pnl → pnl çok negatifse bakiye fazla düşebilirdi.
+  // Doğrusu: likidasyonda 0, normal kapatmada pos.size + pnl (en az 0).
+  var returned=reason==='LİKİDASYON'?0:Math.max(0, pos.size+pnl);
+  s.balance+=returned;
+  s.trades.unshift({id:pos.id,side:pos.side,entry:pos.entry,close:closePrice,size:pos.size,notional:pos.notional,leverage:pos.leverage,pnl:parseFloat(pnl.toFixed(2)),pnlPct:parseFloat((pnl/pos.size*100).toFixed(2)),reason:reason,duration:Math.round((Date.now()-pos.openTime)/60000),openTimeStr:pos.openTimeStr,closeTimeStr:new Date().toLocaleTimeString('tr-TR')});
   if(s.trades.length>100) s.trades.pop();
   s.positions=s.positions.filter(function(p){return p.id!==pos.id;});
   simSave();
-  toast((pnl>=0?'✓ KAR: +':'✗ ZARAR: ')+'$'+pnl.toFixed(2)+' · '+reason,4000);
+  toast((pnl>=0?'✓ KAR: +':'✗ ZARAR: ')+'$'+Math.abs(pnl).toFixed(2)+' · '+reason,4000);
 }
 function simCheckPositions(){
   var s=S.sim, p=S.price; if(!p||!s.positions.length) return;
@@ -6120,11 +6148,13 @@ function scalpSignal(){
   }
 
   // ── 8. VWAP KONUMU + MOMENTUM (ağırlık 2) ──
+  // BUG FIX: Güçlü sinyal koşulu tersydi. vwapDiff<0.8 = fiyat VWAP'a çok yakın → zayıf.
+  // Güçlü sinyal: fiyat VWAP'tan uzakta (>0.5%) VE momentum aynı yönde.
   var vwap15=vwapCalc(hi.slice(-24),lo.slice(-24),cl.slice(-24),(vols.slice(-24).length?vols.slice(-24):new Array(24).fill(1)));
   var vwapDiff=(p-vwap15)/vwap15*100;
-  if(p>vwap15&&last>prev&&vwapDiff<0.8){ bull+=2; factors.push({name:'VWAP Üstü + Mom. ↑',dir:'LONG',w:2,val:'+'+vwapDiff.toFixed(2)+'%',strong:false}); }
+  if(p>vwap15&&last>prev&&vwapDiff>0.5){ bull+=2; factors.push({name:'VWAP Üstü + Mom. ↑',dir:'LONG',w:2,val:'+'+vwapDiff.toFixed(2)+'%',strong:vwapDiff>1}); }
   else if(p>vwap15&&last>prev){ bull+=1; factors.push({name:'VWAP Üstü',dir:'LONG',w:1,val:'+'+vwapDiff.toFixed(2)+'%',strong:false}); }
-  else if(p<vwap15&&last<prev&&vwapDiff>-0.8){ bear+=2; factors.push({name:'VWAP Altı + Mom. ↓',dir:'SHORT',w:2,val:vwapDiff.toFixed(2)+'%',strong:false}); }
+  else if(p<vwap15&&last<prev&&vwapDiff<-0.5){ bear+=2; factors.push({name:'VWAP Altı + Mom. ↓',dir:'SHORT',w:2,val:vwapDiff.toFixed(2)+'%',strong:vwapDiff<-1}); }
   else if(p<vwap15&&last<prev){ bear+=1; factors.push({name:'VWAP Altı',dir:'SHORT',w:1,val:vwapDiff.toFixed(2)+'%',strong:false}); }
   else { factors.push({name:'VWAP Nötr',dir:'NOTR',w:0,val:vwapDiff.toFixed(2)+'%',strong:false}); }
 
@@ -6350,19 +6380,16 @@ function scalpSimOpen(dir,entry,tp,sl){
 
 function scalpSimClose(pos,closePrice,reason){
   var s=S.scalpSim;
-  // Slippage — gerçek piyasada market order her zaman aleyhine kayar
-  // Giriş: %0.03 aleyhine, Çıkış: %0.03 aleyhine
-  var SLIP=0.0003; // %0.03 per işlem = round-trip %0.06
-  var slippedClose=reason==='TP'?closePrice*(pos.side==='LONG'?1-SLIP:1+SLIP):
-                   reason==='STOP'||reason==='LİKİDASYON'?closePrice*(pos.side==='LONG'?1-SLIP:1+SLIP):
-                   closePrice*(pos.side==='LONG'?1-SLIP:1+SLIP);
+  // BUG FIX: Slippage çift sayılıyordu — slippedClose fiyata SLIP uygulanıyor,
+  // sonra ayrıca pnl -= slippageCost ile tekrar düşülüyordu (%0.06 yerine %0.09 etki).
+  // Çözüm: slippedClose tek slippage kaynağı. Ayrıca pnl -= slippageCost kaldırıldı.
+  var SLIP=0.0003; // %0.03 per işlem
+  var slippedClose=closePrice*(pos.side==='LONG'?1-SLIP:1+SLIP);
   var pnl=pos.side==='LONG'?(slippedClose-pos.entry)/pos.entry*pos.notional:(pos.entry-slippedClose)/pos.entry*pos.notional;
   var feePct=0.0004; // round-trip komisyon %0.04
   var fee=pos.notional*feePct;
-  var slippageCost=pos.notional*SLIP; // Slippage maliyeti
+  var slippageCost=pos.notional*SLIP; // sadece gösterim için (pnl'e eklenmez)
   pnl-=fee;
-  // Slippage giriş için de düş (giriş zaten aleyhine doldu)
-  pnl-=slippageCost;
   var pnlPct=pnl/pos.size*100;
   var dur=Math.round((Date.now()-pos.openTs)/60000);
   s.balance+=pos.size+pnl;
