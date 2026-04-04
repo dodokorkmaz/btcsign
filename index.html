@@ -1347,8 +1347,9 @@ function v9Signal(cl, hi, lo, vols){
   var trendDir=trendUpStrong?'UP':trendDnStrong?'DOWN':'YATAY';
   // Hacim diverjansı: Fiyat düşüyor + hacim YÜKSEK = satıcı tükendi → bullish
   // Fiyat yükseliyor + hacim DÜŞÜK = konviksiyon yok → zayıf ralli → bearish
-  var volDivBull=(mom3<-0.01&&vSpike&&last>bb.lower);
-  var volDivBear=(mom3>0.01&&!vSpike&&last<bb.upper);
+  // FIX: BB lower yakınında kontrol (bb.lower*1.005) — orta bantta gürültü azaltıldı
+  var volDivBull=(mom3<-0.01&&vSpike&&bb&&last<=bb.lower*1.008);
+  var volDivBear=(mom3>0.01&&!vSpike&&bb&&last>=bb.upper*0.992);
   var mtfBull=(mom3>0&&mom10>0&&ema9>ema20);
   var mtfBear=(mom3<0&&mom10<0&&ema9<ema20);
   // V13: Mum formasyonu tespiti (open verisi S.o1h'dan, yoksa tahmin)
@@ -1593,10 +1594,15 @@ function v9Signal(cl, hi, lo, vols){
     else if(rv14>64){ l3Bear+=1; L3.push({t:'RSI '+rv14.toFixed(0)+' yüksek',bull:false}); }
   }
 
-  // MACD histogram dönüşü (yeni — V13)
+  // MACD histogram dönüşü (V13)
+  // FIX: mv.hist>mv.macd*0.05 şartı macd negatifken her zaman true oluyordu.
+  // Doğru: hem histogram hem MACD aynı bölgede olmalı (cross teyidi)
   if(mv){
-    if(mv.hist>0&&mv.hist>mv.macd*0.05){ l3Bull+=1; L3.push({t:'MACD histogram pozitif dönüş',bull:true}); }
-    else if(mv.hist<0&&mv.hist<mv.macd*0.05){ l3Bear+=1; L3.push({t:'MACD histogram negatif dönüş',bull:false}); }
+    if(mv.hist>0&&mv.macd>0){ l3Bull+=1; L3.push({t:'MACD histogram pozitif + MACD yukarı',bull:true}); }
+    else if(mv.hist<0&&mv.macd<0){ l3Bear+=1; L3.push({t:'MACD histogram negatif + MACD aşağı',bull:false}); }
+    // Histogram sıfır kesişimi (henüz MACD bölge geçmedi ama dönüş başladı)
+    else if(mv.hist>0&&mv.macd<=0){ l3Bull+=0.5; L3.push({t:'MACD histogram pozitife döndü (MACD bölge geçişi yakın)',bull:true}); }
+    else if(mv.hist<0&&mv.macd>=0){ l3Bear+=0.5; L3.push({t:'MACD histogram negatife döndü (MACD bölge geçişi yakın)',bull:false}); }
   }
 
   // BB + Hacim
@@ -1621,9 +1627,10 @@ function v9Signal(cl, hi, lo, vols){
   else if(last>vwapV&&mom3<-0.002){ l3Bear+=1; L3.push({t:'VWAP üstü düşüş + momentum',bull:false}); }
 
   // V13: VPOC yakınlığı (Volume Point of Control)
-  if(S.vpoc&&Math.abs(last-S.vpoc)/last<0.003){
-    if(mom3>0.001){ l3Bull+=1; L3.push({t:'VPOC $'+Math.round(S.vpoc).toLocaleString('tr-TR')+' destek, yukarı dönüş',bull:true}); }
-    else if(mom3<-0.001){ l3Bear+=1; L3.push({t:'VPOC $'+Math.round(S.vpoc).toLocaleString('tr-TR')+' direnç, aşağı baskı',bull:false}); }
+  // FIX: calcVPOC {price,vol,min,max} nesnesi döndürür — S.vpoc.price kullanılmalı
+  if(S.vpoc&&S.vpoc.price&&Math.abs(last-S.vpoc.price)/last<0.003){
+    if(mom3>0.001){ l3Bull+=1; L3.push({t:'VPOC $'+Math.round(S.vpoc.price).toLocaleString('tr-TR')+' destek, yukarı dönüş',bull:true}); }
+    else if(mom3<-0.001){ l3Bear+=1; L3.push({t:'VPOC $'+Math.round(S.vpoc.price).toLocaleString('tr-TR')+' direnç, aşağı baskı',bull:false}); }
   }
 
   var l3Total=Math.max(l3Bull+l3Bear,1);
@@ -1653,10 +1660,11 @@ function v9Signal(cl, hi, lo, vols){
     else if(l1Bear>=3&&shortVotes>=5) sig='SHORT';
   }
 
-  // BUG FIX: OI düşünce sadece LONG iptal edilir, SHORT değil.
-  // Sert düşüşlerde OI zaten düşer (long likit olur) — bu SHORT sinyalini
-  // iptal etmek yerine teyit eder. Eskisi her iki yönü de engelliyordu.
+  // FIX: OI düşünce LONG'u iptal et ama SHORT'u ENGELLEME (tam tersine teyit olabilir).
+  // OI < -4% = pozisyon kapanıyor, ama bu short likit olabilir = SHORT sinyaline bonus.
   if(sig==='LONG'&&S.oiChange!=null&&S.oiChange<-4) sig='NEUTRAL';
+  // OI sert düşüyor + fiyat aşağı = short squeeze değil, long likit = SHORT teyidi
+  // (mevcut SHORT sinyal zaten geçerli, ek müdahale yok)
 
   // ─── YENİ: Seans filtresi — düşük hacim saatlerinde sinyal engelle ───
   var sessionWarning='';
@@ -2087,6 +2095,11 @@ function renMasterPanel(){
   }
   var calInfo=S.dynThr.calibrated?(' · Eşik '+S.dynThr.longThr+'/'+S.dynThr.shortThr):'';
   votesHTML+='<span class="v9-badge vb-info">ADX '+res.dx.adx.toFixed(0)+' · RSI '+(res.rv!=null?res.rv.toFixed(0):'--')+'</span>';
+  // FIX: Strength rozeti — WEAK/STRONG ayrımı göster
+  if(res.strength==='STRONG_LONG'){ votesHTML+='<span class="v9-badge vb-ok">⬆ GÜÇLÜ LONG</span>'; }
+  else if(res.strength==='STRONG_SHORT'){ votesHTML+='<span class="v9-badge vb-bad">⬇ GÜÇLÜ SHORT</span>'; }
+  else if(res.strength==='WEAK_LONG'){ votesHTML+='<span class="v9-badge vb-warn">△ ZAYIF LONG</span>'; }
+  else if(res.strength==='WEAK_SHORT'){ votesHTML+='<span class="v9-badge vb-warn">▽ ZAYIF SHORT</span>'; }
   if(res.volRegime){
     var vrColor=res.volRegime==='YÜKSEK'?'vb-bad':res.volRegime==='DÜŞÜK'?'vb-ok':'vb-info';
     votesHTML+='<span class="v9-badge '+vrColor+'">VOL:'+res.volRegime+'</span>';
@@ -4649,7 +4662,7 @@ function renTahmin(){
 
   // ── SİNYAL LOG ──
   if(hasSignal&&tp1v&&slV){
-    var seansNow=utcH>=8&&utcH<13?'Londra':utcH>=13&&utcH<22?'NY':utcH>=2&&utcH<6?'Ölü':'Asya';
+    var seansNow=utcH>=17&&utcH<22?'NY':utcH>=13&&utcH<17?'L+NY':utcH>=8&&utcH<13?'Londra':utcH>=2&&utcH<6?'Ölü':'Asya';
     var nowTs=Date.now();
     var lastLog=S.signalLog[0];
     var isDup=lastLog&&lastLog.dir===dir&&(nowTs-lastLog.ts)<300000;
@@ -4782,7 +4795,7 @@ function renTahmin(){
       html+='<div style="display:flex;align-items:center;padding:6px 12px;background:'+(at?'rgba(247,147,26,.1)':'transparent')+';border-left:3px solid '+(at?'var(--O)':key?'rgba(167,139,250,.3)':'transparent')+'">';
       html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:'+(key?'var(--P)':'var(--t2)')+';min-width:48px">'+fr.label+'</div>';
       html+='<div style="flex:1;height:1px;background:'+(key?'rgba(167,139,250,.2)':'var(--dim2)')+'"></div>';
-      html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;font-weight:700;color:'+(at?'var(--O)':key?'var(--t)':'var(--t2)')+'">$'+Math.round(fr.v).toLocaleString('tr-TR')+(at?' ◄':'')+(S.vpoc&&Math.abs(S.vpoc.price-fr.v)<fr.v*0.003?' ★VPOC':'')+roleLabel+'</div>';
+      html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;font-weight:700;color:'+(at?'var(--O)':key?'var(--t)':'var(--t2)')+'">$'+Math.round(fr.v).toLocaleString('tr-TR')+(at?' ◄':'')+(S.vpoc&&S.vpoc.price&&Math.abs(S.vpoc.price-fr.v)<fr.v*0.003?' ★VPOC':'')+roleLabel+'</div>';
       html+='</div>';
     });
     html+='</div>';
@@ -5437,8 +5450,14 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   var atrV=(S.c1h&&S.h1h&&S.l1h)?atr(S.h1h.slice(-20),S.l1h.slice(-20),S.c1h.slice(-20)):0;
   var ofS=calcOrderFlowScore();
   var utcH=new Date().getUTCHours();
-  var seans=utcH>=8&&utcH<17?'Londra':utcH>=13&&utcH<22?'New York':utcH>=0&&utcH<8?'Asya':'Ölü Zone';
-  var seansOk=seans==='Londra'||seans==='New York';
+  // FIX: Seans tanımı standartlaştırıldı (Merkez, Log, v9Signal hepsi aynı saatleri kullanır)
+  // Londra: 08-17 UTC | NY: 13-22 UTC | Overlap(Londra+NY): 13-17 | Asya: 22-08
+  var seans=utcH>=17&&utcH<22?'New York'
+           :utcH>=13&&utcH<17?'Londra+NY'
+           :utcH>=8&&utcH<13?'Londra'
+           :utcH>=6&&utcH<8?'Pre-Londra'
+           :'Asya';
+  var seansOk=seans==='Londra'||seans==='New York'||seans==='Londra+NY';
 
   // ── 11 KRİTER DEĞERLENDİRME ──
   // Her kriter: {label, value, status: 'good'/'warn'/'bad'/'neutral', detail, dir}
@@ -5517,8 +5536,9 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
     } else if(nearShort&&nearShort.pct>0){
       var distS=nearShort.pct.toFixed(1);
       liqVal='$'+Math.round(nearShort.price).toLocaleString('tr-TR');
-      // SHORT liki yukarıda = direnç = olumsuz kriter (kırmızı)
-      liqStatus=parseFloat(distS)<1.5?'bad':'warn';
+      // FIX: 'bad' → 'warn' — Short liki yukarıda direnç anlamına gelir,
+      // LONG'u tamamen engellemek (bad→shortBadCount++) yerine uyarı yeter.
+      liqStatus=parseFloat(distS)<1.5?'warn':'neutral';
       liqDir='SHORT'; liqDetail='Short liki %'+distS+' yukarıda → Direnç bölgesi';
     } else { liqVal='Uzak'; liqDetail='Yakın liki bölgesi yok'; }
   } else { liqVal='Hesaplanıyor...'; liqDetail='1H veri gerekli'; }
@@ -5693,7 +5713,8 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   var fsStatus='neutral', fsDir=null, fsDetail='', fsVal='--';
   if(S.funding!=null&&S.fundingNextTs){
     var minsLeft=Math.floor((S.fundingNextTs-Date.now())/60000);
-    fsVal=minsLeft>0?minsLeft+'dk kaldı':'Şimdi';
+    // FIX: negatif minsLeft'te hatalı string önlendi
+    fsVal=minsLeft>0?minsLeft+'dk kaldı':(minsLeft===0?'Şimdi':'--');
     if(minsLeft<=45&&minsLeft>=0&&S.funding<-0.000002){
       fsStatus='good'; fsDir='LONG';
       fsDetail='⚡ '+minsLeft+'dk kaldı · Negatif fonlama → LONG squeeze yakın';
@@ -5770,7 +5791,8 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
 
   // Eski sayaçlar (uyumluluk için)
   var longActiveGood=aktifKriterler.filter(function(k){return k.status==='good'&&k.dir==='LONG';}).length;
-  var shortActiveGood=aktifKriterler.filter(function(k){return (k.status==='bad'&&k.dir==='SHORT')||(k.status==='good'&&k.dir==='SHORT');}).length;
+  // FIX: shortActiveGood sadece 'good' durumları saymalı — 'bad' eklemek mantıksız (bad SHORT, LONG için kötü demek)
+  var shortActiveGood=aktifKriterler.filter(function(k){return k.status==='good'&&k.dir==='SHORT';}).length;
   var longBadCount=aktifKriterler.filter(function(k){return k.status==='bad'&&k.dir==='SHORT';}).length;
   var shortBadCount=aktifKriterler.filter(function(k){return k.status==='bad'&&k.dir==='LONG';}).length;
   var longVotes=aktifKriterler.filter(function(k){return k.dir==='LONG';}).length;
@@ -6131,8 +6153,9 @@ function scalpSignal(){
 
   // ── 6. 15M MUM FORMASYONU (ağırlık 3) ──
   // open verisi yoksa mum formasyonu hesaplama — hatalı tespit yapar
+  var cp15={patterns:[],bullScore:0,bearScore:0,topBull:null,topBear:null}; // FIX: default değer
   if(S.o15m&&S.o15m.length>=5){
-    var cp15=detectCandlePatterns(S.o15m.slice(-6),hi.slice(-6),lo.slice(-6),cl.slice(-6));
+    cp15=detectCandlePatterns(S.o15m.slice(-6),hi.slice(-6),lo.slice(-6),cl.slice(-6));
     if(cp15.bullScore>0){ var cw=Math.min(cp15.bullScore,3); bull+=cw; factors.push({name:'🕯 '+(cp15.topBull?cp15.topBull.name:'Boğa Formasyonu'),dir:'LONG',w:cw,val:'',strong:cw>=2}); }
     if(cp15.bearScore>0){ var cw2=Math.min(cp15.bearScore,3); bear+=cw2; factors.push({name:'🕯 '+(cp15.topBear?cp15.topBear.name:'Ayı Formasyonu'),dir:'SHORT',w:cw2,val:'',strong:cw2>=2}); }
   }
@@ -6195,7 +6218,8 @@ function scalpSignal(){
   var fundMins=S.fundingNextTs?Math.floor((S.fundingNextTs-Date.now())/60000):99;
   if(fundMins<=45&&fundMins>=5&&S.funding!=null){
     if(S.funding<-0.000001){ bull+=2; factors.push({name:'Fonlama '+fundMins+'dk · Negatif Short Kapatır',dir:'LONG',w:2,val:(S.funding*100).toFixed(4)+'%',strong:fundMins<=20}); }
-    else if(S.funding>0.0008){ bear+=2; factors.push({name:'Fonlama '+fundMins+'dk · Pozitif Long Kapatır',dir:'SHORT',w:2,val:(S.funding*100).toFixed(4)+'%',strong:fundMins<=20}); }
+    // FIX: Pozitif fonlama eşiği 0.0008 → 0.00001 olarak düzeltildi (0.0008=%0.08 gerçekçi değildi)
+    else if(S.funding>0.00001){ bear+=2; factors.push({name:'Fonlama '+fundMins+'dk · Pozitif Long Kapatır',dir:'SHORT',w:2,val:(S.funding*100).toFixed(4)+'%',strong:fundMins<=20}); }
     else if(fundMins<=20){ factors.push({name:'Fonlama '+fundMins+'dk · Nötr',dir:'NOTR',w:0,val:'',strong:false}); }
   }
 
@@ -6290,8 +6314,9 @@ function scalpSignal(){
 
   var isContraTrend=(sig==='LONG'&&trend1h===-1)||(sig==='SHORT'&&trend1h===1);
   if(isContraTrend&&sig!=='BEKLE'){
-    // 1H kontr-trend: eşiği 7'den 6'ya düşür
-    if(bull<6&&bear<6) sig='BEKLE';
+    // 1H kontr-trend: minThresh 6'ya düşür (eşik normalden biraz daha az katı,
+    // çünkü kırılımlar zaten trend karşısında başlar — ama yeterli puan şart)
+    if(Math.max(bull,bear)<6) sig='BEKLE';
   }
   // 4H trende karşıysa eşiği düşür — kırılımlar zaten trend karşısında başlar
   var isContra4h=(sig==='LONG'&&trend4h===-1)||(sig==='SHORT'&&trend4h===1);
