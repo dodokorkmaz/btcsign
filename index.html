@@ -460,11 +460,13 @@ body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(r
         style="width:100%;background:var(--s1);border:1px solid var(--dim2);border-radius:6px;padding:6px 8px;color:var(--t);font-size:10px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box"
         oninput="S_TG.chatId=this.value">
     </div>
-    <div style="display:flex;gap:8px">
-      <button onclick="tgSave()" style="flex:1;background:rgba(0,217,126,.1);border:1px solid rgba(0,217,126,.3);border-radius:6px;color:var(--G);padding:6px;font-size:10px;cursor:pointer">💾 Kaydet</button>
-      <button onclick="tgTest()" style="flex:1;background:rgba(61,158,255,.1);border:1px solid rgba(61,158,255,.3);border-radius:6px;color:var(--B);padding:6px;font-size:10px;cursor:pointer">🧪 Test Gönder</button>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      <button onclick="tgSave()" style="flex:1;min-width:70px;background:rgba(0,217,126,.1);border:1px solid rgba(0,217,126,.3);border-radius:6px;color:var(--G);padding:6px;font-size:10px;cursor:pointer">💾 Kaydet</button>
+      <button onclick="tgTest()" style="flex:1;min-width:70px;background:rgba(61,158,255,.1);border:1px solid rgba(61,158,255,.3);border-radius:6px;color:var(--B);padding:6px;font-size:10px;cursor:pointer">🧪 Test</button>
+      <button onclick="tgBakeAndDownload()" style="flex:1;min-width:70px;background:rgba(247,147,26,.12);border:1px solid rgba(247,147,26,.35);border-radius:6px;color:var(--O);padding:6px;font-size:10px;cursor:pointer;font-weight:700">⬇ Kalıcı Kayıt</button>
     </div>
-    <div style="font-size:9px;color:var(--t2);margin-top:8px">Nasıl kurulur: @BotFather'dan bot oluştur → token al → @userinfobot'tan chat ID al</div>
+    <div id="tgStatusBar" style="display:none;padding:7px 10px;border-radius:6px;font-size:10px;margin-bottom:6px;border:1px solid transparent"></div>
+    <div style="font-size:9px;color:var(--t2);line-height:1.6"><b style="color:var(--O)">⬇ Kalıcı Kayıt</b> → Ayarları dosyanın içine gömer, yeni HTML indirir. Samsung Internet'te yenilemelerde kaybolmaz.<br>Kurulum: @BotFather → token al · @userinfobot → chat ID al</div>
   </div>
     <div class="sh">Fiyat Alarmı</div>
     <div style="background:var(--s1);border:1px solid var(--dim2);border-radius:10px;padding:18px;margin-bottom:12px">
@@ -5381,12 +5383,39 @@ function prog(p,msg){
 }
 
 // ════════════════════════════════════════════════════
-// TELEGRAM BOT — Sinyal bildirimi
 // ════════════════════════════════════════════════════
+// TELEGRAM BOT — 3 Katmanlı Kalıcı Depolama
+// Samsung Internet localStorage temizleme sorununu çözer
+// ════════════════════════════════════════════════════
+function _setCk(name,val,days){
+  try{var e=new Date();e.setTime(e.getTime()+(days||90)*864e5);document.cookie=name+'='+encodeURIComponent(val)+';expires='+e.toUTCString()+';path=/;SameSite=Lax';}catch(e){}
+}
+function _getCk(name){
+  try{var k=name+'=',ca=document.cookie.split(';');for(var i=0;i<ca.length;i++){var c=ca[i].trim();if(c.indexOf(k)===0)return decodeURIComponent(c.substring(k.length));}}catch(e){}return '';
+}
+function _tgRead(key){
+  return _getCk(key)||(function(){try{return localStorage.getItem(key)||'';}catch(e){return '';}}())||'';
+}
+function _tgShowStatus(msg,bg,border,color){
+  var el=document.getElementById('tgStatusBar');if(!el)return;
+  el.style.display='block';el.style.background=bg||'rgba(0,217,126,.1)';
+  el.style.borderColor=border||'rgba(0,217,126,.3)';el.style.color=color||'var(--G)';
+  el.textContent=msg;
+}
+
 var S_TG = {
-  token: localStorage.getItem('tg_token')||'',
-  chatId: localStorage.getItem('tg_chatid')||''
+  token:  _tgRead('tg_token'),
+  chatId: _tgRead('tg_chatid')
 };
+
+window.addEventListener('load',function(){
+  var ti=document.getElementById('tgTokenInput');
+  var ci=document.getElementById('tgChatInput');
+  if(ti&&S_TG.token) ti.value=S_TG.token;
+  if(ci&&S_TG.chatId) ci.value=S_TG.chatId;
+  if(S_TG.token&&S_TG.chatId) _tgShowStatus('✅ Telegram aktif — bot bağlı','rgba(0,217,126,.08)','rgba(0,217,126,.3)','var(--G)');
+},true);
+
 async function tgSend(msg){
   if(!S_TG.token||!S_TG.chatId) return;
   try {
@@ -5401,20 +5430,49 @@ function tgSave(){
   var ci=document.getElementById('tgChatInput');
   if(ti) S_TG.token=ti.value.trim();
   if(ci) S_TG.chatId=ci.value.trim();
-  localStorage.setItem('tg_token',S_TG.token);
-  localStorage.setItem('tg_chatid',S_TG.chatId);
-  toast('Telegram ayarları kaydedildi ✅',2000);
+  if(!S_TG.token||!S_TG.chatId){_tgShowStatus('⚠ Token ve Chat ID giriniz!','rgba(255,59,92,.1)','rgba(255,59,92,.3)','var(--R)');return;}
+  _setCk('tg_token',S_TG.token,90); _setCk('tg_chatid',S_TG.chatId,90);
+  try{localStorage.setItem('tg_token',S_TG.token);localStorage.setItem('tg_chatid',S_TG.chatId);}catch(e){}
+  _tgShowStatus('✅ Kaydedildi (Cookie + localStorage)','rgba(0,217,126,.1)','rgba(0,217,126,.3)','var(--G)');
+  toast('Telegram ayarları kaydedildi ✅',2500);
 }
 function tgTest(){
-  // Önce inputtan oku
   var ti=document.getElementById('tgTokenInput');
   var ci=document.getElementById('tgChatInput');
   if(ti&&ti.value.trim()) S_TG.token=ti.value.trim();
   if(ci&&ci.value.trim()) S_TG.chatId=ci.value.trim();
   if(!S_TG.token||!S_TG.chatId){ toast('Token ve Chat ID giriniz!',3000); return; }
   tgSend('🔔 <b>BTC Signal Pro</b> bağlantı testi başarılı!\nBot aktif ve sinyal bekleniyor.');
-  toast('Telegram test mesajı gönderildi — Telegram\'ı kontrol et',3000);
+  toast('Test mesajı gönderildi — Telegram\'ı kontrol et',3000);
 }
+function tgBakeAndDownload(){
+  var ti=document.getElementById('tgTokenInput');
+  var ci=document.getElementById('tgChatInput');
+  var token=(ti?ti.value.trim():'')||S_TG.token;
+  var chatId=(ci?ci.value.trim():'')||S_TG.chatId;
+  if(!token||!chatId){_tgShowStatus('⚠ Önce Token ve Chat ID giriniz!','rgba(255,59,92,.1)','rgba(255,59,92,.3)','var(--R)');return;}
+  _setCk('tg_token',token,90);_setCk('tg_chatid',chatId,90);
+  try{localStorage.setItem('tg_token',token);localStorage.setItem('tg_chatid',chatId);}catch(e){}
+  S_TG.token=token;S_TG.chatId=chatId;
+  try{
+    var html='<!DOCTYPE html>\n'+document.documentElement.outerHTML;
+    var safeToken=token.replace(/'/g,"\\'");var safeChatId=chatId.replace(/'/g,"\\'");
+    html=html.replace("token:  _tgRead('tg_token'),\n  chatId: _tgRead('tg_chatid')",
+      "token:  '"+safeToken+"',\n  chatId: '"+safeChatId+"'");
+    html=html.replace('id="tgTokenInput" type="text" placeholder="1234567890:ABC..." value=""',
+      'id="tgTokenInput" type="text" placeholder="1234567890:ABC..." value="'+safeToken+'"');
+    html=html.replace('id="tgChatInput" type="text" placeholder="-1001234567890 veya 123456789" value=""',
+      'id="tgChatInput" type="text" placeholder="-1001234567890 veya 123456789" value="'+safeChatId+'"');
+    var blob=new Blob([html],{type:'text/html;charset=utf-8'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');a.href=url;a.download='btc_signal_pro_v13.html';
+    document.body.appendChild(a);a.click();
+    setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url);},1000);
+    _tgShowStatus('⬇ İndiriliyor... İndirilen dosyayı kullan — ayarlar içine gömüldü','rgba(247,147,26,.1)','rgba(247,147,26,.3)','var(--O)');
+    toast('✅ Yeni dosya indiriliyor — bunu kullan!',4000);
+  }catch(err){_tgShowStatus('⚠ Hata: '+err.message,'rgba(255,59,92,.1)','rgba(255,59,92,.3)','var(--R)');}
+}
+
 
 function renderAll(){
   renPrice(); renMasterPanel(); renPremium(); renSignals(); renConfluence();
@@ -5472,16 +5530,18 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   if(fund!=null){
     fundVal=(fund*100).toFixed(4)+'%';
     var fundAlarmNow=fundMins!=null&&fundMins<=45&&fundMins>=0;
+    // FIX: 'good' artık 45dk penceresine bağlı değil — negatif/pozitif fonlama
+    // her zaman yön sinyali. Alarm yakınsa bonus detail metni eklenir.
     if(fund<-0.000002){
-      fundStatus=fundAlarmNow?'good':'warn'; fundDir='LONG';
-      fundDetail='Negatif → Short maliyetli'+(fundAlarmNow?' · ⏰ '+fundCountStr+' kaldı ⚡':'  · Sonraki: '+fundCountStr);
+      fundStatus='good'; fundDir='LONG';
+      fundDetail='Negatif → Short maliyetli'+(fundAlarmNow?' · ⏰ '+fundCountStr+' kaldı ⚡':' · Sonraki: '+fundCountStr);
     } else if(fund<0){
       fundStatus='warn'; fundDir='LONG';
       fundDetail='Hafif negatif · '+fundCountStr+' kaldı';
-    } else if(fund>0.000015){
-      fundStatus=fundAlarmNow?'good':'warn'; fundDir='SHORT';
-      fundDetail='Yüksek → Long maliyetli'+(fundAlarmNow?' · ⏰ '+fundCountStr+' kaldı ⚡':'  · Sonraki: '+fundCountStr);
-    } else if(fund>0.000007){
+    } else if(fund>0.000010){
+      fundStatus='good'; fundDir='SHORT';
+      fundDetail='Yüksek → Long maliyetli'+(fundAlarmNow?' · ⏰ '+fundCountStr+' kaldı ⚡':' · Sonraki: '+fundCountStr);
+    } else if(fund>0.000004){
       fundStatus='warn'; fundDir='SHORT';
       fundDetail='Hafif pozitif · '+fundCountStr+' kaldı';
     } else {
@@ -5495,11 +5555,13 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   var lsStatus='neutral', lsDir=null, lsDetail='', lsVal='--';
   if(S.lsRatio!=null){
     lsVal=S.lsRatio.toFixed(2);
-    if(S.lsRatio<0.75){ lsStatus='good'; lsDir='LONG'; lsDetail='Aşırı short → Squeeze riski'; }
-    else if(S.lsRatio<0.90){ lsStatus='warn'; lsDir='LONG'; lsDetail='Short ağırlıklı'; }
-    else if(S.lsRatio>1.80){ lsStatus='good'; lsDir='SHORT'; lsDetail='Aşırı long → Dump riski'; }
-    else if(S.lsRatio>1.40){ lsStatus='warn'; lsDir='SHORT'; lsDetail='Long ağırlıklı'; }
-    else { lsStatus='neutral'; lsDetail='Dengeli'; }
+    // FIX: Eşikler yumuşatıldı — 0.75→0.85, 1.80→1.60
+    // Eski sistem çok ekstrem değer gerektiriyordu, Londra/NY seansında nadiren olur
+    if(S.lsRatio<0.80){ lsStatus='good'; lsDir='LONG'; lsDetail='Aşırı short → Squeeze riski'; }
+    else if(S.lsRatio<0.92){ lsStatus='warn'; lsDir='LONG'; lsDetail='Short ağırlıklı'; }
+    else if(S.lsRatio>1.60){ lsStatus='good'; lsDir='SHORT'; lsDetail='Aşırı long → Dump riski'; }
+    else if(S.lsRatio>1.30){ lsStatus='warn'; lsDir='SHORT'; lsDetail='Long ağırlıklı'; }
+    else { lsStatus='neutral'; lsDetail='Dengeli (0.92-1.30)'; }
   }
   kriterler.push({label:'L/S Oranı',val:lsVal,status:lsStatus,dir:lsDir,detail:lsDetail,icon:'⚖️'});
 
@@ -5507,16 +5569,15 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   var ofStatus='neutral', ofDir=null, ofDetail='', ofVal='--';
   if(S.ofConnected&&ofS.pct!==50){
     ofVal='%'+ofS.pct+' alım';
-    if(ofS.pct>=65){ ofStatus='good'; ofDir='LONG'; ofDetail='Güçlü alım baskısı'; }
-    else if(ofS.pct>=55){ ofStatus='warn'; ofDir='LONG'; ofDetail='Hafif alım baskısı'; }
-    else if(ofS.pct<=35){ ofStatus='good'; ofDir='SHORT'; ofDetail='Güçlü satış baskısı'; }
-    else if(ofS.pct<=45){ ofStatus='warn'; ofDir='SHORT'; ofDetail='Hafif satış baskısı'; }
+    // FIX: 'good' eşiği 65→60, 'warn' eşiği 55→52 — Londra/NY seansında erişilebilir değerler
+    if(ofS.pct>=60){ ofStatus='good'; ofDir='LONG'; ofDetail='Güçlü alım baskısı'; }
+    else if(ofS.pct>=52){ ofStatus='warn'; ofDir='LONG'; ofDetail='Hafif alım baskısı'; }
+    else if(ofS.pct<=40){ ofStatus='good'; ofDir='SHORT'; ofDetail='Güçlü satış baskısı'; }
+    else if(ofS.pct<=48){ ofStatus='warn'; ofDir='SHORT'; ofDetail='Hafif satış baskısı'; }
     else { ofStatus='neutral'; ofDetail='Dengeli akış'; }
-    // Balina: yönü DEĞİŞTİRME, sadece bilgi olarak ekle
     if(S.ofWhaleTs&&(Date.now()-S.ofWhaleTs)<120000){
       var wa=S.ofWhaleAlert;
       ofDetail+=' · 🐳 $'+Math.round(wa.usd/1000)+'K '+wa.side;
-      // ofDir balina emriyle override edilmez — 60s hacim oranı daha güvenilir
     }
   } else if(!S.ofConnected){
     ofVal='Bağlanıyor...'; ofDetail='WebSocket bekleniyor';
@@ -5570,12 +5631,35 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   var bufShort=buf.filter(function(s){return s==='SHORT';}).length;
   var scChop=sc&&sc.isChop;
   var scSoftChop=sc&&sc.softChop;
-  if(scChop){ teyitStatus='bad'; teyitVal='⚡ CHOP'; teyitDetail='Yatay piyasa — sinyal bloke · ADX '+(sc.adxVal?sc.adxVal.toFixed(0):'--'); }
-  else if(scSoftChop){ teyitStatus='warn'; teyitVal='YUMUŞAK CHOP'; teyitDetail='Eşik 7p · ADX '+(sc.adxVal?sc.adxVal.toFixed(0):'--'); }
-  else if(confirmed==='LONG'){ teyitStatus='good'; teyitDir='LONG'; teyitVal='TEYİT: LONG'; teyitDetail=bufLong+'/3 teyit · Giriş hazır'; }
-  else if(confirmed==='SHORT'){ teyitStatus='good'; teyitDir='SHORT'; teyitVal='TEYİT: SHORT'; teyitDetail=bufShort+'/3 teyit · Giriş hazır'; }
-  else if(bufLong>=1||bufShort>=1){ teyitStatus='warn'; teyitVal='BEKLİYOR '+Math.max(bufLong,bufShort)+'/3'; teyitDetail='Teyit için '+(bufLong>=1?'LONG':'SHORT')+' bekleniyor'; }
-  else { teyitStatus='bad'; teyitVal='TEYİT YOK'; teyitDetail='Sinyal bekleniyor'; }
+  if(scChop){
+    teyitStatus='bad'; teyitVal='⚡ CHOP'; teyitDir=null;
+    teyitDetail='Yatay piyasa — sinyal bloke · ADX '+(sc.adxVal?sc.adxVal.toFixed(0):'--');
+  } else if(scSoftChop){
+    teyitStatus='warn'; teyitVal='YUMUŞAK CHOP'; teyitDir=null;
+    teyitDetail='Eşik 7p · ADX '+(sc.adxVal?sc.adxVal.toFixed(0):'--');
+  } else if(confirmed==='LONG'){
+    // 2/3+ teyit: güçlü
+    teyitStatus='good'; teyitDir='LONG'; teyitVal='TEYİT: LONG';
+    teyitDetail=bufLong+'/'+buf.length+' teyit · Giriş hazır';
+  } else if(confirmed==='SHORT'){
+    teyitStatus='good'; teyitDir='SHORT'; teyitVal='TEYİT: SHORT';
+    teyitDetail=bufShort+'/'+buf.length+' teyit · Giriş hazır';
+  } else if(bufLong>=1&&bufLong>bufShort){
+    // FIX: 1/3 teyit 'good' → puan üretir. Eski kod bunu 'warn' yapıyordu → 0 puan.
+    // 1 teyit bile gerçek bir scalp sinyali; warn olarak değil good (düşük ağırlıkla) say.
+    teyitStatus='good'; teyitDir='LONG'; teyitVal='ERKEN: LONG '+bufLong+'/'+buf.length;
+    teyitDetail='Teyit birikyor — yön LONG';
+  } else if(bufShort>=1&&bufShort>bufLong){
+    teyitStatus='good'; teyitDir='SHORT'; teyitVal='ERKEN: SHORT '+bufShort+'/'+buf.length;
+    teyitDetail='Teyit birikyor — yön SHORT';
+  } else if(sc&&sc.sig!=='BEKLE'){
+    // Scalp sinyali var ama henüz buffer'a girmedi
+    teyitStatus='warn'; teyitDir=sc.sig==='LONG'?'LONG':'SHORT';
+    teyitVal='TEKİL: '+sc.sig;
+    teyitDetail='Scalp sinyali var — teyit bekleniyor';
+  } else {
+    teyitStatus='neutral'; teyitVal='BEKLE'; teyitDetail='Scalp sinyali yok';
+  }
   kriterler.push({label:'Scalp Teyit',val:teyitVal,status:teyitStatus,dir:teyitDir,detail:teyitDetail,icon:'✅'});
 
   // 7. 1H TREND (EMA200)
@@ -5585,15 +5669,17 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
       trendStatus='good'; trendDir='LONG'; trendVal='YUKARI';
       trendDetail='Fiyat EMA200 üstü · EMA20>50';
     } else if(p<ana.ema200&&ana.ema20<ana.ema50){
-      // Aşağı trend → warn (bad değil) — kırılım başlangıçları tam burada olur
-      trendStatus='warn'; trendDir='SHORT'; trendVal='AŞAĞI';
-      trendDetail='⚠ Kontr-trend · EMA200 altı · EMA20<50';
+      // FIX: Aşağı trend artık SHORT için 'good'. Eskisi hep 'warn' veriyordu →
+      // SHORT sinyallerinde 1H Trend'den (ağırlık 3) hiç puan gelmiyordu.
+      // Kırılım başlamadan önce trend aşağıdaysa bu SHORT'u destekler.
+      trendStatus='good'; trendDir='SHORT'; trendVal='AŞAĞI';
+      trendDetail='EMA200 altı · EMA20<50 → Aşağı trend';
     } else if(p>ana.ema200){
       trendStatus='warn'; trendDir='LONG'; trendVal='HAFIF YUKARI';
-      trendDetail='EMA200 üstü ama karışık';
+      trendDetail='EMA200 üstü ama EMA dizilimi karışık';
     } else {
       trendStatus='warn'; trendDir='SHORT'; trendVal='HAFIF AŞAĞI';
-      trendDetail='EMA200 altı ama karışık';
+      trendDetail='EMA200 altı ama EMA dizilimi karışık';
     }
   } else { trendVal='Hesaplanıyor...'; }
   kriterler.push({label:'1H Trend',val:trendVal,status:trendStatus,dir:trendDir,detail:trendDetail,icon:'📈'});
@@ -5603,9 +5689,10 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   if(atrV>0){
     atrVal='$'+Math.round(atrV);
     var atrPct=atrV/p*100;
-    if(atrPct>=0.4&&seansOk){ atrStatus='good'; atrDetail=seans+' seansı · Hareketli piyasa'; }
-    else if(atrPct>=0.25){ atrStatus='warn'; atrDetail=seans+' · Orta hareket · ATR %'+atrPct.toFixed(2); }
-    else { atrStatus='bad'; atrDetail='ATR çok düşük → TP\'ye ulaşmaz'; }
+    // FIX: Eşik 0.4→0.3, seans şartı kaldırıldı (seans bilgiyi detail'e taşındı)
+    if(atrPct>=0.3){ atrStatus='good'; atrDetail=seans+' · Hareketli piyasa · ATR %'+atrPct.toFixed(2); }
+    else if(atrPct>=0.15){ atrStatus='warn'; atrDetail=seans+' · Orta hareket · ATR %'+atrPct.toFixed(2); }
+    else { atrStatus='bad'; atrDetail='ATR çok düşük → TP\'ye ulaşmaz · '+seans; }
   }
   kriterler.push({label:'ATR/Seans',val:atrVal,status:atrStatus,dir:null,detail:atrDetail,icon:'🕒'});
 
@@ -5713,25 +5800,24 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   var fsStatus='neutral', fsDir=null, fsDetail='', fsVal='--';
   if(S.funding!=null&&S.fundingNextTs){
     var minsLeft=Math.floor((S.fundingNextTs-Date.now())/60000);
-    // FIX: negatif minsLeft'te hatalı string önlendi
     fsVal=minsLeft>0?minsLeft+'dk kaldı':(minsLeft===0?'Şimdi':'--');
     if(minsLeft<=45&&minsLeft>=0&&S.funding<-0.000002){
       fsStatus='good'; fsDir='LONG';
       fsDetail='⚡ '+minsLeft+'dk kaldı · Negatif fonlama → LONG squeeze yakın';
-    } else if(minsLeft<=45&&minsLeft>=0&&S.funding>0.000015){
+    } else if(minsLeft<=45&&minsLeft>=0&&S.funding>0.000010){
       fsStatus='good'; fsDir='SHORT';
       fsDetail='⚡ '+minsLeft+'dk kaldı · Pozitif fonlama → Long kapatır';
     } else if(minsLeft<=60&&S.funding<0){
       fsStatus='warn'; fsDir='LONG';
       fsDetail=minsLeft+'dk kaldı · Hafif negatif fonlama';
     } else {
-      fsVal=minsLeft+'dk kaldı';
+      fsVal=minsLeft>0?minsLeft+'dk kaldı':'--';
       fsDetail='Fonlama fırsatı yok şu an';
     }
   }
   kriterler.push({label:'Fonlama Saati',val:fsVal,status:fsStatus,dir:fsDir,detail:fsDetail,icon:'⏰'});
 
-  // ── MOMENumtum Hız Kriteri (yeni) ──
+  // ── Momentum Hız Kriteri ──
   var momVal='--', momStatus='neutral', momDir=null, momDetail='Veri bekleniyor';
   if(S.c15m&&S.c15m.length>=15&&S.price>0){
     var momClose=S.c15m[S.c15m.length-1];
@@ -5741,18 +5827,19 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
     var momVolAvg=S.v15m?S.v15m.slice(-10).reduce(function(a,b){return a+b;},0)/10:0;
     var momVolOk=momVolAvg>0&&momVol>=momVolAvg*1.5;
     momVal=momChg.toFixed(2)+'%';
-    if(momChg<=-0.4&&momVolOk){
+    // FIX: Eşik 0.4→0.25, hacim şartı kaldırıldı (sadece bilgi için ekleniyor)
+    if(momChg<=-0.25){
       momStatus='good'; momDir='SHORT';
-      momDetail='Hızlı düşüş '+momVal+' · Hacim '+( momVolOk?'yüksek':'normal');
-    } else if(momChg<=-0.4){
+      momDetail='Düşüş '+momVal+(momVolOk?' · Hacim yüksek ⚡':' · Hacim normal');
+    } else if(momChg<=-0.1){
       momStatus='warn'; momDir='SHORT';
-      momDetail='Düşüş '+momVal+' · Hacim onayı eksik';
-    } else if(momChg>=0.4&&momVolOk){
+      momDetail='Hafif düşüş '+momVal;
+    } else if(momChg>=0.25){
       momStatus='good'; momDir='LONG';
-      momDetail='Hızlı yükseliş '+momVal+' · Hacim yüksek';
-    } else if(momChg>=0.4){
+      momDetail='Yükseliş '+momVal+(momVolOk?' · Hacim yüksek ⚡':' · Hacim normal');
+    } else if(momChg>=0.1){
       momStatus='warn'; momDir='LONG';
-      momDetail='Yükseliş '+momVal+' · Hacim onayı eksik';
+      momDetail='Hafif yükseliş '+momVal;
     } else {
       momDetail='Hareket yok · '+momVal;
     }
@@ -5779,14 +5866,20 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   var aktifKriterler=kriterler.filter(function(k){return !k.bilgiOnly;});
   var totalK=aktifKriterler.length;
 
-  // Ağırlıklı puan hesabı
+  // FIX: Ağırlıklı puan hesabı — 'warn' artık 0.5x puan üretiyor.
+  // Eski sistem: sadece 'good' puan üretiyordu → mildly bullish senaryo 0 puan alıyordu.
+  // Yeni sistem: 'good'=tam ağırlık, 'warn'=yarım ağırlık, 'bad'/'neutral'=0.
   var longScore=0, shortScore=0, maxScore=0;
   aktifKriterler.forEach(function(k){
     var w=WEIGHTS[k.label]||1;
     maxScore+=w;
-    if(k.status==='good'&&k.dir==='LONG') longScore+=w;
-    else if(k.status==='good'&&k.dir==='SHORT') shortScore+=w;
-    // bad kriterler score'a dahil değil — sadece longBadCount/shortBadCount olarak takip ediliyor
+    if(k.dir==='LONG'){
+      if(k.status==='good') longScore+=w;
+      else if(k.status==='warn') longScore+=w*0.5;
+    } else if(k.dir==='SHORT'){
+      if(k.status==='good') shortScore+=w;
+      else if(k.status==='warn') shortScore+=w*0.5;
+    }
   });
 
   // Eski sayaçlar (uyumluluk için)
@@ -5810,53 +5903,52 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   var ofTrendConflict=(ofDir2==='LONG'&&trendDir2==='SHORT')||(ofDir2==='SHORT'&&trendDir2==='LONG');
   var conflictReason=ofTrendConflict?'⚡ OF↔Trend çelişkisi':'';
 
-  // LONG: OF satış baskısı yoksa + çelişki yok
+  // LONG: OF kötü değilse + büyük çelişki yok
   var longHardOk=(
-    ofKriter&&
-    ofKriter.status!=='bad'&&  // OF kötü değilse
+    // OF bağlı değilse de LONG'a izin ver (WebSocket her zaman bağlanmayabilir)
+    (!ofKriter||ofKriter.status!=='bad')&&
     !ofTrendConflict
   );
-  // SHORT: OF alım baskısı yoksa veya zayıfsa + çelişki yok
+  // SHORT: OF alım baskısı 'good' değilse + büyük çelişki yok
   var shortHardOk=(
-    ofKriter&&
-    (ofKriter.dir==='SHORT'||ofKriter.dir===null||ofKriter.status==='neutral'||
-     (ofKriter.dir==='LONG'&&ofKriter.status!=='good'))&& // Zayıf alım varsa SHORT'a izin ver
+    (!ofKriter||ofKriter.dir!=='LONG'||ofKriter.status!=='good')&&
     !ofTrendConflict
   );
 
-  // Eşikler: max 18 puan
-  // LONG GİR: 8+ puan (%44) + hard rule
-  // DÜŞÜNEBİLİRSİN: 6+ puan
-  var LONG_ENTER  = 8;
-  var LONG_THINK  = 6;
-  var SHORT_ENTER = 8;
-  var SHORT_THINK = 6;
+  // FIX: Eşikler warn=0.5x sisteme göre kalibre edildi (max 20 puan)
+  // ENTER: 10/20 (%50) → güçlü ama ulaşılabilir sinyal
+  // THINK: 7/20 (%35) → dikkatli giriş alanı
+  var LONG_ENTER  = 10;
+  var LONG_THINK  = 7;
+  var SHORT_ENTER = 10;
+  var SHORT_THINK = 7;
 
   var karar='BEKLE', kararC='var(--Y)', kararBg='rgba(251,191,36,.06)', kararBd='rgba(251,191,36,.3)';
   var kararDetail='';
   var kararScore = Math.max(longScore, shortScore);
+  var kararScoreStr=kararScore%1===0?kararScore.toString():kararScore.toFixed(1);
   var scDir=sc?sc.sig:'NEUTRAL';
 
   if(longScore>=LONG_ENTER&&longBadCount<=1&&longHardOk){
     karar='LONG GİR'; kararC='var(--G)'; kararBg='rgba(0,217,126,.08)'; kararBd='rgba(0,217,126,.4)';
-    kararDetail='✅ '+longScore+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter · Güçlü LONG';
+    kararDetail='✅ '+longScore.toFixed(1)+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter · Güçlü LONG';
     if(!S._lastKararTg||S._lastKararTg!=='LONG'||(Date.now()-(S._lastKararTgTs||0))>300000){
       S._lastKararTg='LONG'; S._lastKararTgTs=Date.now();
-      tgSend('🟢 <b>KARAR: LONG GİR</b>\n💰 $'+(S.price?Math.round(S.price).toLocaleString('tr-TR'):'--')+'\n📊 Puan: '+longScore+'/'+maxScore+' · '+longActiveGood+'/'+totalK+' kriter\n⏰ '+new Date().toLocaleTimeString('tr-TR'));
+      tgSend('🟢 <b>KARAR: LONG GİR</b>\n💰 $'+(S.price?Math.round(S.price).toLocaleString('tr-TR'):'--')+'\n📊 Puan: '+longScore.toFixed(1)+'/'+maxScore+' · '+longActiveGood+'/'+totalK+' kriter\n⏰ '+new Date().toLocaleTimeString('tr-TR'));
     }
   } else if(shortScore>=SHORT_ENTER&&shortBadCount<=1&&shortHardOk){
     karar='SHORT GİR'; kararC='var(--R)'; kararBg='rgba(255,59,92,.08)'; kararBd='rgba(255,59,92,.4)';
-    kararDetail='✅ '+shortScore+'/'+maxScore+' puan · '+shortActiveGood+'/'+totalK+' kriter · Güçlü SHORT';
+    kararDetail='✅ '+shortScore.toFixed(1)+'/'+maxScore+' puan · '+shortActiveGood+'/'+totalK+' kriter · Güçlü SHORT';
     if(!S._lastKararTg||S._lastKararTg!=='SHORT'||(Date.now()-(S._lastKararTgTs||0))>300000){
       S._lastKararTg='SHORT'; S._lastKararTgTs=Date.now();
-      tgSend('🔴 <b>KARAR: SHORT GİR</b>\n💰 $'+(S.price?Math.round(S.price).toLocaleString('tr-TR'):'--')+'\n📊 Puan: '+shortScore+'/'+maxScore+' · '+shortActiveGood+'/'+totalK+' kriter\n⏰ '+new Date().toLocaleTimeString('tr-TR'));
+      tgSend('🔴 <b>KARAR: SHORT GİR</b>\n💰 $'+(S.price?Math.round(S.price).toLocaleString('tr-TR'):'--')+'\n📊 Puan: '+shortScore.toFixed(1)+'/'+maxScore+' · '+shortActiveGood+'/'+totalK+' kriter\n⏰ '+new Date().toLocaleTimeString('tr-TR'));
     }
   } else if(longScore>=LONG_THINK&&longBadCount<=1&&longHardOk){
     karar='LONG DÜŞÜNEBİLİRSİN'; kararC='var(--G)'; kararBg='rgba(0,217,126,.04)'; kararBd='rgba(0,217,126,.25)';
-    kararDetail='⚠ '+longScore+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter · Dikkatli gir';
+    kararDetail='⚠ '+longScore.toFixed(1)+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter · Dikkatli gir';
   } else if(shortScore>=SHORT_THINK&&shortBadCount<=1&&shortHardOk){
     karar='SHORT DÜŞÜNEBİLİRSİN'; kararC='var(--R)'; kararBg='rgba(255,59,92,.04)'; kararBd='rgba(255,59,92,.25)';
-    kararDetail='⚠ '+shortScore+'/'+maxScore+' puan · '+shortActiveGood+'/'+totalK+' kriter · Dikkatli gir';
+    kararDetail='⚠ '+shortScore.toFixed(1)+'/'+maxScore+' puan · '+shortActiveGood+'/'+totalK+' kriter · Dikkatli gir';
   } else if(longBadCount>=3||shortBadCount>=3){
     karar='RİSKLİ'; kararC='var(--R)'; kararBg='rgba(255,59,92,.05)'; kararBd='rgba(255,59,92,.2)';
     var riskYon=longBadCount>=3?'LONG':'SHORT';
@@ -5866,7 +5958,7 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
     var proxyWarn='';
     var errCount2=Object.values(S.status).filter(function(v){return v==='err';}).length;
     if(errCount2>=3) proxyWarn=' · ⚠ '+errCount2+' API hatası';
-    kararDetail=(conflictReason?conflictReason+' · ':'')+'L:'+longScore+' S:'+shortScore+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter'+proxyWarn;
+    kararDetail=(conflictReason?conflictReason+' · ':'')+'L:'+longScore.toFixed(1)+' S:'+shortScore.toFixed(1)+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter'+proxyWarn;
   }
 
   // ── HTML RENDER ──
