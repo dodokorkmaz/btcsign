@@ -2506,7 +2506,7 @@ function renTurev(){
       {name:'L/S Oranı',        key:'LS-Binance', zorunlu:false},
       {name:'Order Book',       key:'OB',         zorunlu:false},
       {name:'BTC Dominance',    key:'Dom',        zorunlu:false},
-      {name:'Haberler',         key:'news',       zorunlu:false},
+      {name:'Haberler (CryptoPanic)',key:'cpanic',zorunlu:false},
     ];
     var health=dataHealth();
     var healthColor=health>=80?'var(--G)':health>=50?'var(--Y)':'var(--R)';
@@ -3118,6 +3118,9 @@ async function loadBasis(){
 
 // ═══ ORDER BOOK ═══
 async function loadOrderBook(){
+  // WebSocket bağlıysa depth20 stream zaten gerçek Binance Futures OB veriyor
+  // Spot Bitget/OKX yerine futures OB — çok daha doğru ve senkron
+  if(S.ofConnected && S.ob && !S.ob.synthetic){ return; }
   var d=null;
   try {
     var bg=await apiFetch('OB','https://api.bitget.com/api/v2/spot/market/orderbook?symbol=BTCUSDT&limit=150',function(j){
@@ -3512,7 +3515,11 @@ function checkAlarms(){
 
 // ═══ DATA LOADERS ═══
 async function loadPrice(){
-  // Birincil: Binance Futures (CORS yok, hızlı)
+  // WebSocket bağlıysa markPrice stream zaten anlık fiyatı güncelliyor — REST'e gerek yok
+  if(S.ofConnected && S.price>0 && (Date.now()-TS.price)<15000){
+    S.status['BN-Price']='ok'; return;
+  }
+  // Birincil: Binance Futures REST (WS bağlı değilse yedek)
   var bn=await apiFetch('BN-Price','https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT',function(j){return j;});
   if(bn&&bn.lastPrice){
     S.prev=S.price||parseFloat(bn.lastPrice);
@@ -3898,25 +3905,68 @@ function calcNetFlowScore(){
 // VPN gerekir
 // ════════════════════════════════════════════════════════
 function startOrderFlow(){
-  if(S.ofWs&&S.ofWs.readyState===WebSocket.OPEN) return; // Zaten bağlı
+  if(S.ofWs&&S.ofWs.readyState===WebSocket.OPEN) return;
   try {
-    var ws=new WebSocket('wss://fstream.binance.com/ws/btcusdt@aggTrade');
+    // Combined stream: aggTrade (Order Flow) + depth20 (Gerçek OB) + markPrice (Fiyat)
+    // Tek bağlantıda 3 veri — REST CORS sorununu tamamen bypass eder
+    var ws=new WebSocket('wss://fstream.binance.com/stream?streams=btcusdt@aggTrade/btcusdt@depth20@500ms/btcusdt@markPrice');
     S.ofWs=ws;
 
     ws.onopen=function(){
       S.ofConnected=true;
       S.status['orderflow']='ok';
-      toast('📊 Order Flow bağlandı',2000);
+      S.status['BN-Price']='ok';  // markPrice stream fiyatı da sağlar
+      S.status['OB']='ok';        // depth20 stream OB'yi sağlar
+      toast('📊 Order Flow + OB + Fiyat bağlandı',2000);
     };
 
     ws.onmessage=function(event){
       try {
-        var d=JSON.parse(event.data);
-        // aggTrade: {p:price, q:quantity, m:isBuyerMaker}
+        var msg=JSON.parse(event.data);
+        // Combined stream: {stream:'btcusdt@aggTrade', data:{...}}
+        var streamName=msg.stream||'';
+        var d=msg.data||msg;
+
+        // ── FIYAT (markPrice stream) ──
+        if(streamName.indexOf('markPrice')!==-1||(d.e&&d.e==='markPriceUpdate')){
+          var mp=parseFloat(d.p||0);
+          if(mp>1000){
+            S.prev=S.price||mp;
+            S.price=mp;
+            TS.price=Date.now();
+            S.status['BN-Price']='ok';
+          }
+          return;
+        }
+
+        // ── ORDER BOOK — Binance Futures depth20 (gerçek futures OB) ──
+        if(streamName.indexOf('depth20')!==-1||(d.b&&d.a&&Array.isArray(d.b))){
+          var bids=d.b||[];
+          var asks=d.a||[];
+          if(bids.length>0&&asks.length>0){
+            var mid=S.price||parseFloat(bids[0][0])||0;
+            var bidSlice=bids.filter(function(b){return mid-parseFloat(b[0])<mid*0.03;});
+            var askSlice=asks.filter(function(a){return parseFloat(a[0])-mid<mid*0.03;});
+            var bidVol=bidSlice.reduce(function(s,b){return s+parseFloat(b[0])*parseFloat(b[1]);},0);
+            var askVol=askSlice.reduce(function(s,a){return s+parseFloat(a[0])*parseFloat(a[1]);},0);
+            var tot=bidVol+askVol;
+            var bias=tot>0?(bidVol-askVol)/tot:0;
+            var bidWall=null,askWall=null,WT=15; // 15 BTC+ = büyük duvar
+            bidSlice.forEach(function(b){var sz=parseFloat(b[1]);if(sz>=WT&&(!bidWall||sz>bidWall.btc))bidWall={price:parseFloat(b[0]),btc:sz,usd:parseFloat(b[0])*sz};});
+            askSlice.forEach(function(a){var sz=parseFloat(a[1]);if(sz>=WT&&(!askWall||sz>askWall.btc))askWall={price:parseFloat(a[0]),btc:sz,usd:parseFloat(a[0])*sz};});
+            S.ob={bids:bidSlice,asks:askSlice,bidVol:bidVol,askVol:askVol,synthetic:false};
+            S.obBias=bias; S.obBidWall=bidWall; S.obAskWall=askWall;
+            S.status['OB']='ok';
+          }
+          return;
+        }
+
+        // ── ORDER FLOW (aggTrade stream) ──
+        if(streamName!==''&&streamName.indexOf('aggTrade')===-1) return;
         var price=parseFloat(d.p||0);
         var qty=parseFloat(d.q||0);
         var usd=price*qty;
-        var side=d.m?'SELL':'BUY'; // m=true → maker=buyer → taker=seller
+        var side=d.m?'SELL':'BUY';
         var ts=d.T||Date.now();
 
         // Buffer'a ekle
@@ -5457,12 +5507,17 @@ function tgBakeAndDownload(){
   try{
     var html='<!DOCTYPE html>\n'+document.documentElement.outerHTML;
     var safeToken=token.replace(/'/g,"\\'");var safeChatId=chatId.replace(/'/g,"\\'");
-    html=html.replace("token:  _tgRead('tg_token'),\n  chatId: _tgRead('tg_chatid')",
+    // FIX: Regex replace — tarayıcı outerHTML normalize etse de eşleşir
+    html=html.replace(/token:\s+_tgRead\('tg_token'\),\s+chatId:\s+_tgRead\('tg_chatid'\)/,
       "token:  '"+safeToken+"',\n  chatId: '"+safeChatId+"'");
-    html=html.replace('id="tgTokenInput" type="text" placeholder="1234567890:ABC..." value=""',
+    html=html.replace(/id="tgTokenInput"[^>]*value="[^"]*"/,
       'id="tgTokenInput" type="text" placeholder="1234567890:ABC..." value="'+safeToken+'"');
-    html=html.replace('id="tgChatInput" type="text" placeholder="-1001234567890 veya 123456789" value=""',
+    html=html.replace(/id="tgChatInput"[^>]*value="[^"]*"/,
       'id="tgChatInput" type="text" placeholder="-1001234567890 veya 123456789" value="'+safeChatId+'"');
+    // Bake başarı kontrolü
+    if(!html.includes("token:  '"+safeToken)){
+      throw new Error('Token gömme başarısız — dosya yapısı değişmiş olabilir');
+    }
     var blob=new Blob([html],{type:'text/html;charset=utf-8'});
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a');a.href=url;a.download='btc_signal_pro_v13.html';
@@ -5538,10 +5593,13 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
     } else if(fund<0){
       fundStatus='warn'; fundDir='LONG';
       fundDetail='Hafif negatif · '+fundCountStr+' kaldı';
-    } else if(fund>0.000010){
+    } else if(fund>0.000015){
+      // FIX: 0.000010 çok düşük — normal BTC fonlama sıklıkla bu seviyede
+      // 0.000015 (%0.0015) daha anlamlı SHORT sinyali eşiği
       fundStatus='good'; fundDir='SHORT';
       fundDetail='Yüksek → Long maliyetli'+(fundAlarmNow?' · ⏰ '+fundCountStr+' kaldı ⚡':' · Sonraki: '+fundCountStr);
-    } else if(fund>0.000004){
+    } else if(fund>0.000006){
+      // warn: 0.0006% - 0.0015% arası
       fundStatus='warn'; fundDir='SHORT';
       fundDetail='Hafif pozitif · '+fundCountStr+' kaldı';
     } else {
@@ -5555,13 +5613,13 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   var lsStatus='neutral', lsDir=null, lsDetail='', lsVal='--';
   if(S.lsRatio!=null){
     lsVal=S.lsRatio.toFixed(2);
-    // FIX: Eşikler yumuşatıldı — 0.75→0.85, 1.80→1.60
-    // Eski sistem çok ekstrem değer gerektiriyordu, Londra/NY seansında nadiren olur
-    if(S.lsRatio<0.80){ lsStatus='good'; lsDir='LONG'; lsDetail='Aşırı short → Squeeze riski'; }
-    else if(S.lsRatio<0.92){ lsStatus='warn'; lsDir='LONG'; lsDetail='Short ağırlıklı'; }
-    else if(S.lsRatio>1.60){ lsStatus='good'; lsDir='SHORT'; lsDetail='Aşırı long → Dump riski'; }
-    else if(S.lsRatio>1.30){ lsStatus='warn'; lsDir='SHORT'; lsDetail='Long ağırlıklı'; }
-    else { lsStatus='neutral'; lsDetail='Dengeli (0.92-1.30)'; }
+    // L/S eşikleri: good=0.78/1.65, warn=0.90/1.35
+    // Dengeli: sık ama anlamlı tetikleme — 1.30 çok sık, 1.80 çok nadir
+    if(S.lsRatio<0.78){ lsStatus='good'; lsDir='LONG'; lsDetail='Aşırı short → Squeeze riski yüksek'; }
+    else if(S.lsRatio<0.90){ lsStatus='warn'; lsDir='LONG'; lsDetail='Short ağırlıklı piyasa'; }
+    else if(S.lsRatio>1.65){ lsStatus='good'; lsDir='SHORT'; lsDetail='Aşırı long → Dump riski'; }
+    else if(S.lsRatio>1.35){ lsStatus='warn'; lsDir='SHORT'; lsDetail='Long ağırlıklı piyasa'; }
+    else { lsStatus='neutral'; lsDetail='Dengeli (0.90-1.35)'; }
   }
   kriterler.push({label:'L/S Oranı',val:lsVal,status:lsStatus,dir:lsDir,detail:lsDetail,icon:'⚖️'});
 
@@ -5569,11 +5627,13 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   var ofStatus='neutral', ofDir=null, ofDetail='', ofVal='--';
   if(S.ofConnected&&ofS.pct!==50){
     ofVal='%'+ofS.pct+' alım';
-    // FIX: 'good' eşiği 65→60, 'warn' eşiği 55→52 — Londra/NY seansında erişilebilir değerler
+    // OF eşikleri: good=60/40%, warn=55/45%
+    // FIX: 52% çok sık tetikleniyordu (neredeyse her zaman warn LONG)
+    // 55% daha seçici — gerçek alım baskısı anlamına gelir
     if(ofS.pct>=60){ ofStatus='good'; ofDir='LONG'; ofDetail='Güçlü alım baskısı'; }
-    else if(ofS.pct>=52){ ofStatus='warn'; ofDir='LONG'; ofDetail='Hafif alım baskısı'; }
+    else if(ofS.pct>=55){ ofStatus='warn'; ofDir='LONG'; ofDetail='Hafif alım baskısı'; }
     else if(ofS.pct<=40){ ofStatus='good'; ofDir='SHORT'; ofDetail='Güçlü satış baskısı'; }
-    else if(ofS.pct<=48){ ofStatus='warn'; ofDir='SHORT'; ofDetail='Hafif satış baskısı'; }
+    else if(ofS.pct<=45){ ofStatus='warn'; ofDir='SHORT'; ofDetail='Hafif satış baskısı'; }
     else { ofStatus='neutral'; ofDetail='Dengeli akış'; }
     if(S.ofWhaleTs&&(Date.now()-S.ofWhaleTs)<120000){
       var wa=S.ofWhaleAlert;
@@ -5827,17 +5887,19 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
     var momVolAvg=S.v15m?S.v15m.slice(-10).reduce(function(a,b){return a+b;},0)/10:0;
     var momVolOk=momVolAvg>0&&momVol>=momVolAvg*1.5;
     momVal=momChg.toFixed(2)+'%';
-    // FIX: Eşik 0.4→0.25, hacim şartı kaldırıldı (sadece bilgi için ekleniyor)
-    if(momChg<=-0.25){
+    // Momentum eşiği: good=0.35%, warn=0.15%
+    // 0.25% çok sık tetikleniyordu (15m'de %46 ihtimal)
+    // 0.35% daha seçici, hacim onayı bilgi amaçlı gösterilir
+    if(momChg<=-0.35){
       momStatus='good'; momDir='SHORT';
-      momDetail='Düşüş '+momVal+(momVolOk?' · Hacim yüksek ⚡':' · Hacim normal');
-    } else if(momChg<=-0.1){
+      momDetail='Güçlü düşüş '+momVal+(momVolOk?' · Hacim yüksek ⚡':' · Hacim normal');
+    } else if(momChg<=-0.15){
       momStatus='warn'; momDir='SHORT';
       momDetail='Hafif düşüş '+momVal;
-    } else if(momChg>=0.25){
+    } else if(momChg>=0.35){
       momStatus='good'; momDir='LONG';
-      momDetail='Yükseliş '+momVal+(momVolOk?' · Hacim yüksek ⚡':' · Hacim normal');
-    } else if(momChg>=0.1){
+      momDetail='Güçlü yükseliş '+momVal+(momVolOk?' · Hacim yüksek ⚡':' · Hacim normal');
+    } else if(momChg>=0.15){
       momStatus='warn'; momDir='LONG';
       momDetail='Hafif yükseliş '+momVal;
     } else {
@@ -5861,7 +5923,7 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
     'Fonlama Saati': 1,
     'Momentum Hız':  2,  // Hız bazlı momentum - hızlı tetikleyici  // Zamanlama
   };
-  // Max puan: 18
+  // Max puan: 20 (11 kriter × ağırlıklar: 3+3+2+2+2+2+1+1+1+1+2)
 
   var aktifKriterler=kriterler.filter(function(k){return !k.bilgiOnly;});
   var totalK=aktifKriterler.length;
@@ -5909,9 +5971,11 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
     (!ofKriter||ofKriter.status!=='bad')&&
     !ofTrendConflict
   );
-  // SHORT: OF alım baskısı 'good' değilse + büyük çelişki yok
+  // SHORT: OF anlamlı alım baskısı (good VEYA warn LONG) yoksa + büyük çelişki yok
+  // FIX: Eski kod sadece 'good' LONG'u blokluyordu. 52-59% alım (warn LONG) varken
+  // SHORT vermek mantıksız. Artık hem good hem warn LONG SHORT'u bloklar.
   var shortHardOk=(
-    (!ofKriter||ofKriter.dir!=='LONG'||ofKriter.status!=='good')&&
+    (!ofKriter||(ofKriter.dir!=='LONG'||(ofKriter.status!=='good'&&ofKriter.status!=='warn')))&&
     !ofTrendConflict
   );
 
