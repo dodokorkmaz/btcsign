@@ -726,7 +726,10 @@ function sw(id, el){
   if(tc) tc.classList.add('on');
   if(id==='scalp') renScalp();
   if(id==='merkez') renMerkez();
-  if(id==='backtest'){ renBacktest(); }
+  if(id==='main') renMasterPanel();
+  if(id==='signals') renSignals();
+  if(id==='confluence') renConfluence();
+  if(id==='backtest') renBacktest();
   if(id==='turev') renTurev();
   if(id==='haber') renHaber();
   if(id==='premium') renPremium();
@@ -734,6 +737,7 @@ function sw(id, el){
   if(id==='sim') renSim();
   if(id==='log') renLog();
   if(id==='mumfor') renMumFor();
+  if(id==='alarm') renderAlarms();
 }
 
 var PROXIES = [
@@ -2105,10 +2109,6 @@ function renMasterPanel(){
   else if(res.strength==='STRONG_SHORT'){ votesHTML+='<span class="v9-badge vb-bad">⬇ GÜÇLÜ SHORT</span>'; }
   else if(res.strength==='WEAK_LONG'){   votesHTML+='<span class="v9-badge vb-warn">△ ZAYIF LONG</span>'; }
   else if(res.strength==='WEAK_SHORT'){  votesHTML+='<span class="v9-badge vb-warn">▽ ZAYIF SHORT</span>'; }
-  if(res.strength==='STRONG_LONG'){ votesHTML+='<span class="v9-badge vb-ok">⬆ GÜÇLÜ LONG</span>'; }
-  else if(res.strength==='STRONG_SHORT'){ votesHTML+='<span class="v9-badge vb-bad">⬇ GÜÇLÜ SHORT</span>'; }
-  else if(res.strength==='WEAK_LONG'){ votesHTML+='<span class="v9-badge vb-warn">△ ZAYIF LONG</span>'; }
-  else if(res.strength==='WEAK_SHORT'){ votesHTML+='<span class="v9-badge vb-warn">▽ ZAYIF SHORT</span>'; }
   if(res.volRegime){
     var vrColor=res.volRegime==='YÜKSEK'?'vb-bad':res.volRegime==='DÜŞÜK'?'vb-ok':'vb-info';
     votesHTML+='<span class="v9-badge '+vrColor+'">VOL:'+res.volRegime+'</span>';
@@ -2906,7 +2906,28 @@ async function fetchKlines(tf){
 }
 
 async function fetchFunding(){
-  var res=await apiFetch('funding','https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=12',function(j){return Array.isArray(j)?j:null;});
+  // Binance fapi dene
+  var res=await apiFetch('funding','https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=12',function(j){
+    return Array.isArray(j)&&j.length?j:null;
+  });
+
+  // Binance başarısız → Bybit fallback (Türkiye'de açık)
+  if(!res){
+    try{
+      var r=await fetch('https://api.bybit.com/v5/market/funding/history?category=linear&symbol=BTCUSDT&limit=12',{signal:AbortSignal.timeout(10000)});
+      if(r.ok){
+        var j=await r.json();
+        if(j&&j.result&&j.result.list&&j.result.list.length){
+          // Bybit → Binance formatına çevir
+          res=j.result.list.map(function(item){
+            return {fundingRate:parseFloat(item.fundingRate),fundingTime:item.fundingRateTimestamp};
+          }).reverse(); // Bybit yeni→eski, Binance eski→yeni
+          S.status['funding']='bybit';
+        }
+      }
+    }catch(e){}
+  }
+
   if(res&&res.length){
     S.funding=parseFloat(res[res.length-1].fundingRate);
     S.fundingHistory=res.map(function(r){return parseFloat(r.fundingRate);});
@@ -2920,18 +2941,61 @@ async function fetchFG(){
 }
 
 async function fetchOI(){
-  var res=await apiFetch('oi','https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT',function(j){return j&&j.openInterest?parseFloat(j.openInterest)*S.price:null;});
-  if(res){
+  var oiContracts=null;
+  // Binance fapi dene
+  var res=await apiFetch('oi','https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT',function(j){
+    return j&&j.openInterest?parseFloat(j.openInterest):null; // sadece kontrat sayısı döndür
+  });
+  if(res) oiContracts=res;
+
+  // Bybit fallback
+  if(!oiContracts){
+    try{
+      var r=await fetch('https://api.bybit.com/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=5min&limit=1',{signal:AbortSignal.timeout(10000)});
+      if(r.ok){
+        var j=await r.json();
+        if(j&&j.result&&j.result.list&&j.result.list.length){
+          oiContracts=parseFloat(j.result.list[0].openInterest);
+          S.status['oi']='bybit';
+        }
+      }
+    }catch(e){}
+  }
+
+  if(oiContracts&&oiContracts>0){
+    var price=S.price>0?S.price:(S.c1h&&S.c1h.length?S.c1h[S.c1h.length-1]:0);
+    var oiUSD=oiContracts*price;
     if(S.oi!=null) S.oiPrev=S.oi;
-    S.oi=res;
-    S.oiChange=S.oiPrev?(res-S.oiPrev)/S.oiPrev*100:null;
+    S.oi=oiUSD;
+    S.oiChange=S.oiPrev&&S.oiPrev>0?(oiUSD-S.oiPrev)/S.oiPrev*100:null;
     TS.oi=Date.now();
   }
 }
 
 async function fetchLS(){
-  var res=await apiFetch('lsRatio','https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=5m&limit=1',function(j){return Array.isArray(j)&&j.length?parseFloat(j[0].longShortRatio):null;});
-  if(res){S.lsRatio=res; TS.lsRatio=Date.now();}
+  // Binance fapi dene
+  var res=await apiFetch('lsRatio','https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=5m&limit=1',function(j){
+    return Array.isArray(j)&&j.length?parseFloat(j[0].longShortRatio):null;
+  });
+
+  // Bybit fallback
+  if(!res){
+    try{
+      var r=await fetch('https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=BTCUSDT&period=4h&limit=1',{signal:AbortSignal.timeout(10000)});
+      if(r.ok){
+        var j=await r.json();
+        if(j&&j.result&&j.result.list&&j.result.list.length){
+          var item=j.result.list[0];
+          var buyRatio=parseFloat(item.buyRatio);
+          var sellRatio=parseFloat(item.sellRatio);
+          if(sellRatio>0) res=buyRatio/sellRatio;
+          S.status['lsRatio']='bybit';
+        }
+      }
+    }catch(e){}
+  }
+
+  if(res&&res>0){S.lsRatio=res; TS.lsRatio=Date.now();}
 }
 
 async function fetchOB(){
@@ -3111,30 +3175,48 @@ function renChart(){
 function initOrderFlow(){
   if(S.ofWs) return;
   try{
-    var ws=new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@aggTrade');
-    ws.onopen=function(){S.ofConnected=true;var b=document.getElementById('ofStatusBadge');if(b){b.textContent='OF: CANLI';b.style.background='rgba(0,217,126,.1)';b.style.borderColor='rgba(0,217,126,.2)';b.style.color='var(--G)';}};
+    // Bybit WebSocket (Türkiye'de açık, Binance stream.binance.com bloklu)
+    var ws=new WebSocket('wss://stream.bybit.com/v5/public/linear');
+    ws.onopen=function(){
+      S.ofConnected=true;
+      // BTCUSDT public trade akışına abone ol
+      ws.send(JSON.stringify({op:'subscribe',args:['publicTrade.BTCUSDT']}));
+      var b=document.getElementById('ofStatusBadge');
+      if(b){b.textContent='OF: CANLI';b.style.background='rgba(0,217,126,.1)';b.style.borderColor='rgba(0,217,126,.2)';b.style.color='var(--G)';}
+    };
     ws.onmessage=function(e){
       try{
         var d=JSON.parse(e.data);
-        var side=d.m?'SELL':'BUY';
-        var usd=parseFloat(d.p)*parseFloat(d.q);
-        var now=Date.now();
-        S.ofBuf.push({ts:now,side:side,usd:usd});
-        S.ofBuf=S.ofBuf.filter(function(o){return now-o.ts<60000;});
-        if(usd>=S.OF_LARGE){
-          if(side==='BUY') S.ofLargeBuys.unshift({ts:now,usd:usd,price:parseFloat(d.p)});
-          else S.ofLargeSells.unshift({ts:now,usd:usd,price:parseFloat(d.p)});
-          if(usd>=2000000){S.ofWhaleAlert={side:side,usd:usd,price:parseFloat(d.p),ts:now};S.ofWhaleTs=now;}
-        }
-        var buyVol=0,sellVol=0;
-        S.ofBuf.forEach(function(o){o.side==='BUY'?buyVol+=o.usd:sellVol+=o.usd;});
-        S.ofBuyVol60s=buyVol; S.ofSellVol60s=sellVol; S.ofNetFlow=buyVol-sellVol;
-        var taker=buyVol+sellVol>0?buyVol/(buyVol+sellVol)*100:50;
-        S.takerBuyPct=taker;
-        S.cvdTrend=taker>55?1:taker<45?-1:0;
+        if(!d.data||!Array.isArray(d.data)) return;
+        d.data.forEach(function(trade){
+          // Bybit format: {S:'Buy'/'Sell', v:'quantity', p:'price', T:timestamp}
+          var side=trade.S==='Buy'?'BUY':'SELL';
+          var usd=parseFloat(trade.v)*parseFloat(trade.p);
+          var now=Date.now();
+          S.ofBuf.push({ts:now,side:side,usd:usd});
+          S.ofBuf=S.ofBuf.filter(function(o){return now-o.ts<60000;});
+          if(usd>=S.OF_LARGE){
+            if(side==='BUY') S.ofLargeBuys.unshift({ts:now,usd:usd,price:parseFloat(trade.p)});
+            else S.ofLargeSells.unshift({ts:now,usd:usd,price:parseFloat(trade.p)});
+            if(usd>=2000000){S.ofWhaleAlert={side:side,usd:usd,price:parseFloat(trade.p),ts:now};S.ofWhaleTs=now;}
+          }
+          var buyVol=0,sellVol=0;
+          S.ofBuf.forEach(function(o){o.side==='BUY'?buyVol+=o.usd:sellVol+=o.usd;});
+          S.ofBuyVol60s=buyVol; S.ofSellVol60s=sellVol; S.ofNetFlow=buyVol-sellVol;
+          var taker=buyVol+sellVol>0?buyVol/(buyVol+sellVol)*100:50;
+          S.takerBuyPct=taker;
+          S.cvdTrend=taker>55?1:taker<45?-1:0;
+          S.cvdDivergence=(S.cvdTrend===1&&S.c1h&&S.c1h.length>3&&S.c1h[S.c1h.length-1]<S.c1h[S.c1h.length-3])||
+                          (S.cvdTrend===-1&&S.c1h&&S.c1h.length>3&&S.c1h[S.c1h.length-1]>S.c1h[S.c1h.length-3]);
+        });
       }catch(err){}
     };
-    ws.onclose=function(){S.ofConnected=false;S.ofWs=null;var b=document.getElementById('ofStatusBadge');if(b){b.textContent='OF: --';b.style.background='rgba(255,59,92,.1)';b.style.borderColor='rgba(255,59,92,.2)';b.style.color='var(--R)';}setTimeout(initOrderFlow,5000);};
+    ws.onclose=function(){
+      S.ofConnected=false;S.ofWs=null;
+      var b=document.getElementById('ofStatusBadge');
+      if(b){b.textContent='OF: --';b.style.background='rgba(255,59,92,.1)';b.style.borderColor='rgba(255,59,92,.2)';b.style.color='var(--R)';}
+      setTimeout(initOrderFlow,8000);
+    };
     ws.onerror=function(){ws.close();};
     S.ofWs=ws;
   }catch(e){}
