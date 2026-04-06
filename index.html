@@ -740,6 +740,16 @@ function sw(id, el){
   if(id==='alarm') renderAlarms();
 }
 
+// Samsung Internet uyumluluk: AbortSignal.timeout() yerine
+function mkSignal(ms){
+  try{
+    if(AbortSignal.timeout) return AbortSignal.timeout(ms);
+  }catch(e){}
+  var c=new AbortController();
+  setTimeout(function(){c.abort();},ms);
+  return c.signal;
+}
+
 var PROXIES = [
   // Raw proxy — doğrudan JSON döner
   function(u){ return 'https://corsproxy.io/?'+encodeURIComponent(u); },
@@ -764,7 +774,7 @@ function proxyUnwrap(j){
 async function apiFetch(name, url, parse){
   var stamp = url+(url.includes('?')?'&':'?')+'_t='+Date.now();
   try {
-    var r = await fetch(stamp, {cache:'no-store', signal:AbortSignal.timeout(7000)});
+    var r = await fetch(stamp, {cache:'no-store', signal:mkSignal(7000)});
     if(!r.ok) throw new Error('HTTP '+r.status);
     var j = await r.json();
     var res = parse(proxyUnwrap(j));
@@ -773,7 +783,7 @@ async function apiFetch(name, url, parse){
   } catch(e) {
     for(var i=0;i<PROXIES.length;i++){
       try {
-        var r2 = await fetch(PROXIES[i](stamp), {cache:'no-store', signal:AbortSignal.timeout(10000)});
+        var r2 = await fetch(PROXIES[i](stamp), {cache:'no-store', signal:mkSignal(10000)});
         if(!r2.ok) continue;
         var j2 = await r2.json();
         var res2 = parse(proxyUnwrap(j2));
@@ -2802,7 +2812,7 @@ async function fetchPrice(){
   // Binance başarısız → Bybit fallback
   if(!res){
     try{
-      var byr=await fetch('https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT',{signal:AbortSignal.timeout(8000)});
+      var byr=await fetch('https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT',{signal:mkSignal(8000)});
       if(byr.ok){
         var byj=await byr.json();
         var byd=byj&&byj.result&&byj.result.list&&byj.result.list[0];
@@ -2820,7 +2830,7 @@ async function fetchPrice(){
   // Bybit da başarısız → CoinGecko fallback (daha yavaş ama güvenilir)
   if(!res){
     try{
-      var cgr=await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true',{signal:AbortSignal.timeout(10000)});
+      var cgr=await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true',{signal:mkSignal(10000)});
       if(cgr.ok){
         var cgj=await cgr.json();
         if(cgj&&cgj.bitcoin&&cgj.bitcoin.usd){
@@ -2879,7 +2889,7 @@ async function fetchKlines(tf){
     try{
       var ccUrl='https://min-api.cryptocompare.com/data/v2/'+cfg.ccTf
         +'?fsym=BTC&tsym=USDT&limit='+cfg.ccLim+'&aggregate='+cfg.ccAgg+'&api_key=nokey';
-      var ccR=await fetch(ccUrl,{signal:AbortSignal.timeout(12000)});
+      var ccR=await fetch(ccUrl,{signal:mkSignal(12000)});
       if(ccR.ok){
         var ccJ=await ccR.json();
         if(ccJ&&ccJ.Data&&ccJ.Data.Data&&ccJ.Data.Data.length){
@@ -2914,7 +2924,7 @@ async function fetchFunding(){
   // Binance başarısız → Bybit fallback (Türkiye'de açık)
   if(!res){
     try{
-      var r=await fetch('https://api.bybit.com/v5/market/funding/history?category=linear&symbol=BTCUSDT&limit=12',{signal:AbortSignal.timeout(10000)});
+      var r=await fetch('https://api.bybit.com/v5/market/funding/history?category=linear&symbol=BTCUSDT&limit=12',{signal:mkSignal(10000)});
       if(r.ok){
         var j=await r.json();
         if(j&&j.result&&j.result.list&&j.result.list.length){
@@ -2951,7 +2961,7 @@ async function fetchOI(){
   // Bybit fallback
   if(!oiContracts){
     try{
-      var r=await fetch('https://api.bybit.com/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=5min&limit=1',{signal:AbortSignal.timeout(10000)});
+      var r=await fetch('https://api.bybit.com/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=5min&limit=1',{signal:mkSignal(10000)});
       if(r.ok){
         var j=await r.json();
         if(j&&j.result&&j.result.list&&j.result.list.length){
@@ -2981,7 +2991,7 @@ async function fetchLS(){
   // Bybit fallback
   if(!res){
     try{
-      var r=await fetch('https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=BTCUSDT&period=4h&limit=1',{signal:AbortSignal.timeout(10000)});
+      var r=await fetch('https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=BTCUSDT&period=4h&limit=1',{signal:mkSignal(10000)});
       if(r.ok){
         var j=await r.json();
         if(j&&j.result&&j.result.list&&j.result.list.length){
