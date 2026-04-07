@@ -713,40 +713,50 @@ function sw(id, el){
   el.classList.add('on');
   var tc=document.getElementById('tc-'+id);
   if(tc) tc.classList.add('on');
+
+  var dataReady=S.price>0&&S.c1h&&S.c1h.length>=20;
+
   if(id==='scalp'){
     renScalp();
-    // Veri henüz yüklenmediyse 3s ve 7s sonra tekrar dene
-    if(!S.c15m||!S.price){setTimeout(renScalp,3000);setTimeout(renScalp,7000);}
+    if(!dataReady){setTimeout(renScalp,2500);setTimeout(renScalp,6000);}
   }
   if(id==='merkez'){
     renMerkez();
-    if(!S.c1h||!S.price){setTimeout(renMerkez,3000);setTimeout(renMerkez,7000);}
+    if(!dataReady){setTimeout(renMerkez,2500);setTimeout(renMerkez,6000);}
   }
   if(id==='btcchart'){
     renBtcChart();
-    if(!S.c1h){setTimeout(renBtcChart,3000);}
+    if(!dataReady||!S._smc){setTimeout(renBtcChart,2500);setTimeout(renBtcChart,6000);}
   }
   if(id==='turev'){
     renTurev();
-    if(!S.c1h){setTimeout(renTurev,3000);}
+    if(!dataReady){setTimeout(renTurev,2500);}
   }
   if(id==='haber'){
     renHaber();
-    if(!S.c1h){setTimeout(renHaber,3000);}
+    if(!S.liqLevels||!S.liqLevels.length){setTimeout(renHaber,3000);}
   }
   if(id==='premium'){
     renPremium();
-    if(!S.c1h||!S.price){setTimeout(renPremium,3000);}
+    if(!dataReady){setTimeout(renPremium,2500);}
   }
   if(id==='tahmin'){
     renTahmin();
-    if(!S.c1h||!S.price){setTimeout(renTahmin,3000);}
+    if(!dataReady){setTimeout(renTahmin,2500);}
+  }
+  if(id==='confluence'){
+    renConfluence();
+    if(!dataReady){setTimeout(renConfluence,2500);setTimeout(renConfluence,6000);}
+  }
+  if(id==='main'){
+    renMasterPanel();
+    if(!dataReady){setTimeout(renMasterPanel,2500);}
   }
   if(id==='log') renLog();
   if(id==='signals'){
     renSignals();
     renBacktest();
-    if(!S.c1h){setTimeout(function(){renSignals();renBacktest();},3000);}
+    if(!dataReady){setTimeout(function(){renSignals();renBacktest();},3000);}
   }
 }
 
@@ -2976,27 +2986,34 @@ function renConfluence(){
   }).join('');
   var tbl=el('mtfTbl');
   if(tbl){
-    var tfs=['15m','30m','1H','4H','6H','1D','1W'];
-    var rows='<tr><th>TF</th><th>RSI</th><th>MACD</th><th>EMA Trend</th><th>V9 Sinyal</th></tr>';
+    var tfs=['15m','30m','1H','4H','6H','1D'];
+    var rows='<tr><th>TF</th><th>RSI</th><th>MACD</th><th>EMA Trend</th><th>Sinyal</th></tr>';
     tfs.forEach(function(tf){
       var r=S.rsi[tf], m=S.macd[tf], e=S.ema[tf];
-      if(!r&&!m) return;
       var rc=r?(r<35?'var(--G)':r>65?'var(--R)':'var(--t2)'):'var(--dim)';
       var mc=m?(m.hist>0?'var(--G)':'var(--R)'):'var(--dim)';
-      var trend='--', tc='var(--dim)';
+      var trend='--', tc2='var(--dim)';
       if(e&&S.price){
-        if(S.price>e.e200&&e.e20>e.e50){trend='YUKARI';tc='var(--G)';}
-        else if(S.price<e.e200&&e.e20<e.e50){trend='AŞAĞI';tc='var(--R)';}
-        else {trend='YATAY';tc='var(--Y)';}
+        if(S.price>e.e200&&e.e20>e.e50){trend='YUKARI';tc2='var(--G)';}
+        else if(S.price<e.e200&&e.e20<e.e50){trend='AŞAĞI';tc2='var(--R)';}
+        else{trend='YATAY';tc2='var(--Y)';}
       }
-      var sig='NOTR', sc='var(--t2)';
-      if(r){if(r<35||(m&&m.hist>0&&r<50)){sig='LONG';sc='var(--G)';}else if(r>65||(m&&m.hist<0&&r>50)){sig='SHORT';sc='var(--R)';}}
+      var sig='--', sc2='var(--dim)';
+      if(r&&m){
+        if(r<35||(m.hist>0&&r<50)){sig='LONG';sc2='var(--G)';}
+        else if(r>65||(m.hist<0&&r>50)){sig='SHORT';sc2='var(--R)';}
+        else{sig='NÖTR';sc2='var(--t2)';}
+      } else if(r){
+        if(r<35){sig='LONG';sc2='var(--G)';}
+        else if(r>65){sig='SHORT';sc2='var(--R)';}
+        else{sig='NÖTR';sc2='var(--t2)';}
+      }
       rows+='<tr>'
         +'<td style="color:var(--O);font-weight:700">'+tf+'</td>'
         +'<td style="color:'+rc+'">'+(r?r.toFixed(1):'--')+'</td>'
-        +'<td style="color:'+mc+'">'+(m?(m.hist>0?'+':'')+m.hist.toFixed(0):'--')+'</td>'
-        +'<td style="color:'+tc+'">'+trend+'</td>'
-        +'<td style="color:'+sc+';font-weight:700">'+sig+'</td></tr>';
+        +'<td style="color:'+mc+'">'+(m?(m.hist>=0?'+':'')+m.hist.toFixed(0):'--')+'</td>'
+        +'<td style="color:'+tc2+'">'+trend+'</td>'
+        +'<td style="color:'+sc2+';font-weight:700">'+sig+'</td></tr>';
     });
     tbl.innerHTML=rows;
   }
@@ -4007,6 +4024,15 @@ function renBtcChart(){
   var pp=document.getElementById('btcChartPanel'); if(!pp) return;
   var p=S.price||0;
 
+  // Fiyat bile gelmemişse loading göster
+  if(!p){
+    pp.innerHTML='<div style="background:#080d1a;border:1px solid #162032;border-radius:12px;padding:40px;text-align:center">'
+      +'<div style="font-family:IBM Plex Mono,monospace;font-size:11px;color:#8ba8cc;margin-bottom:6px">⏳ Fiyat verisi bekleniyor...</div>'
+      +'<div style="font-size:9px;color:#4a6a94">VPN bağlantısını kontrol et · Otomatik yenileme devam ediyor</div>'
+      +'</div>';
+    return;
+  }
+
   // ── TF'ye göre veri seç ──
   var tfMap={
     '1m': {cl:S.c1m,hi:S.h1m,lo:S.l1m,vols:S.v1m,label:'1 Dakika'},
@@ -4022,7 +4048,10 @@ function renBtcChart(){
   // SMC her zaman 1H verisi üzerinden (kurumsal seviyeler)
   var cl1h=S.c1h;
   if(!cl1h||cl1h.length<10){
-    pp.innerHTML='<div style="text-align:center;padding:40px;color:#8ba8cc;font-size:11px">1H verisi yükleniyor...</div>';
+    pp.innerHTML='<div style="background:#080d1a;border:1px solid #162032;border-radius:12px;padding:40px;text-align:center">'
+      +'<div style="font-family:IBM Plex Mono,monospace;font-size:11px;color:#8ba8cc;margin-bottom:6px">⏳ 1H Klines yükleniyor...</div>'
+      +'<div style="font-size:9px;color:#4a6a94">Fiyat: $'+Math.round(p).toLocaleString(\'tr-TR\')+' · Klines bekleniyor</div>'
+      +'</div>';
     return;
   }
   if(!cl||cl.length<5){
@@ -4033,7 +4062,15 @@ function renBtcChart(){
 
   // SMC hesapla (önbellekten veya yeni)
   var smc=(!S._smc||(Date.now()-S._smc.ts)>14000)?calcSMC():S._smc;
-  if(!smc) return;
+  // SMC null ise fallback obje oluştur — panel boş kalmasın
+  if(!smc){
+    smc={
+      kz:{active:false,name:'Bekleniyor',inAsiaRange:false,inPreLondon:false,inLondonKZ:false,inNYKZ:false,inLondonCls:false,isLondonDST:false},
+      ar:null, ehl:{equalHighs:[],equalLows:[],nearEH:false,nearEL:false},
+      str:{structureBull:null,bos:null,choch:null},
+      fvg:{bull:[],bear:[],nearBull:null,nearBear:null}
+    };
+  }
   var kz=smc.kz, ar=smc.ar, ehl=smc.ehl, str=smc.str, fvg=smc.fvg;
 
   // Göstergeler — seçili TF verisinden hesapla
@@ -8061,11 +8098,16 @@ async function init(){
   // (VPN gecikmesi nedeniyle tab açıkken veri yoksa boş kalabilir)
   setTimeout(function(){
     renderAll();
-    var scTc=document.getElementById('tc-scalp');
-    if(scTc&&scTc.classList.contains('on')) renScalp();
-    var mzTc2=document.getElementById('tc-merkez');
-    if(mzTc2&&mzTc2.classList.contains('on')) renMerkez();
-  }, 3000);
+    // Hangi sekme aktifse onu da render et
+    var activeTc=document.querySelector('.tc.on');
+    if(activeTc){
+      var tcId=activeTc.id.replace('tc-','');
+      var fakeEl={classList:{add:function(){},remove:function(){}}};
+      // Sadece render, tab switch değil
+      var renMap={scalp:renScalp,merkez:renMerkez,btcchart:renBtcChart,confluence:renConfluence,turev:renTurev,haber:renHaber,premium:renPremium,tahmin:renTahmin,log:renLog,signals:function(){renSignals();renBacktest();}};
+      if(renMap[tcId]) renMap[tcId]();
+    }
+  }, 3500);
 
   setInterval(function(){
     var e=document.getElementById('clock');
