@@ -522,6 +522,16 @@ body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(r
 // MİMARİ: 3 KATMAN + PREMIUM + VERİ GÜVENİLİRLİK KALKANI
 // ═══════════════════════════════════════════════════
 
+// ── AbortSignal.timeout POLYFILL (Samsung Internet uyumu) ──
+// AbortSignal.timeout() bazı tarayıcılarda desteklenmiyor.
+// Bu fonksiyon her tarayıcıda çalışır.
+function makeAbortSignal(ms){
+  var ctrl=new AbortController();
+  var tid=setTimeout(function(){ctrl.abort();},ms);
+  ctrl.signal.addEventListener('abort',function(){clearTimeout(tid);},{once:true});
+  return ctrl.signal;
+}
+
 // ── VERİ TAZELIK EŞİKLERİ (ms) ──
 var STALE = {
   price:    60000,    // 60 saniye
@@ -767,26 +777,26 @@ var PROXIES = [
 ];
 async function apiFetch(name, url, parse){
   var stamp = url+(url.includes('?')?'&':'?')+'_t='+Date.now();
+  // Direkt deneme — 4 saniye
   try {
-    var r = await fetch(stamp, {cache:'no-store', signal:AbortSignal.timeout(6000)});
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    var j = await r.json();
-    var res = parse(j);
-    if(res!=null){ S.status[name]='ok'; return res; }
-    throw new Error('null');
-  } catch(e) {
-    for(var i=0;i<PROXIES.length;i++){
-      try {
-        var r2 = await fetch(PROXIES[i](stamp), {cache:'no-store', signal:AbortSignal.timeout(8000)});
-        if(!r2.ok) continue;
-        var j2 = await r2.json();
-        var res2 = parse(j2);
-        if(res2!=null){ S.status[name]='prx'; return res2; }
-      } catch(e2){}
+    var r = await fetch(stamp, {cache:'no-store', signal:makeAbortSignal(4000)});
+    if(r.ok){
+      var j = await r.json();
+      var res = parse(j);
+      if(res!=null){ S.status[name]='ok'; return res; }
     }
-    S.status[name]='err';
-    return null;
-  }
+  } catch(e){}
+  // Tek proxy (corsproxy.io) — 5 saniye
+  try {
+    var r2 = await fetch(PROXIES[0](stamp), {cache:'no-store', signal:makeAbortSignal(5000)});
+    if(r2.ok){
+      var j2 = await r2.json();
+      var res2 = parse(j2);
+      if(res2!=null){ S.status[name]='prx'; return res2; }
+    }
+  } catch(e2){}
+  S.status[name]='err';
+  return null;
 }
 
 // ═══ MATEMATİK KÜTÜPHANESİ ═══
@@ -3548,19 +3558,17 @@ async function loadLiquidations(){
 }
 
 // ═══ V12 — GERÇEK CVD (Binance aggTrades) ═══
-// ═══ V12 — GENİŞLETİLMİŞ CVD (2000 trade · ~30-60 dk pencere) ═══
 async function loadRealCVD(){
   var trades=null;
+  var CVD_URL='https://fapi.binance.com/fapi/v1/aggTrades?symbol=BTCUSDT&limit=500';
+  // Direkt ve proxy paralel dene — hangisi önce gelirse
   try {
-    var r=await fetch('https://fapi.binance.com/fapi/v1/aggTrades?symbol=BTCUSDT&limit=1000',{cache:'no-store',signal:AbortSignal.timeout(8000)});
-    if(r.ok) trades=await r.json();
+    var results=await Promise.race([
+      fetch(CVD_URL,{cache:'no-store',signal:makeAbortSignal(4000)}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
+      fetch('https://corsproxy.io/?'+encodeURIComponent(CVD_URL),{cache:'no-store',signal:makeAbortSignal(5000)}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
+    ]);
+    if(results&&results.length) trades=results;
   } catch(e){}
-  if(!trades){
-    try {
-      var r2=await fetch('https://corsproxy.io/?'+encodeURIComponent('https://fapi.binance.com/fapi/v1/aggTrades?symbol=BTCUSDT&limit=1000'),{cache:'no-store',signal:AbortSignal.timeout(10000)});
-      if(r2.ok) trades=await r2.json();
-    } catch(e){}
-  }
   if(!trades||!trades.length) return;
   var buyVol=0, sellVol=0;
   trades.forEach(function(t){
@@ -3591,7 +3599,7 @@ async function loadRealCVD(){
 // ═══ V12 — FONLAMA GEÇMİŞİ (Binance · son 8 periyot) ═══
 async function loadFundingHistory(){
   try {
-    var r=await fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=8',{cache:'no-store',signal:AbortSignal.timeout(6000)});
+    var r=await fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=8',{cache:'no-store',signal:makeAbortSignal(3000)});
     if(r.ok){
       var j=await r.json();
       if(j&&j.length){
@@ -3702,7 +3710,7 @@ function check15mCandleConfirm(){
 // ═══ V12 — SPOT/FUTURES BASIS ═══
 async function loadBasis(){
   try {
-    var r=await fetch('https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT',{cache:'no-store',signal:AbortSignal.timeout(5000)});
+    var r=await fetch('https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT',{cache:'no-store',signal:makeAbortSignal(5000)});
     if(r.ok){
       var j=await r.json();
       if(j&&j.markPrice&&j.indexPrice){
@@ -4657,7 +4665,7 @@ async function loadNasdaqProxy(){
   try {
     // ETH/BTC kısa vadeli değişimi: risk-on artarsa ETH güçlenir → Nasdaq yukarı proxy
     var r=await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=ETHUSDT',{
-      cache:'no-store', signal:AbortSignal.timeout(5000)
+      cache:'no-store', signal:makeAbortSignal(5000)
     });
     if(r.ok){
       var j=await r.json();
@@ -4675,7 +4683,7 @@ async function loadNasdaqProxy(){
   try {
     // TOTAL2 (BTC hariç kripto): altcoin season = risk-on = Nasdaq bull proxy
     var r2=await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=SOLUSDT',{
-      cache:'no-store', signal:AbortSignal.timeout(5000)
+      cache:'no-store', signal:makeAbortSignal(5000)
     });
     if(r2.ok){
       var j2=await r2.json();
@@ -4696,7 +4704,7 @@ async function loadNasdaqProxy(){
 async function loadHashrate(){
   try {
     var r=await fetch('https://api.blockchain.info/stats?cors=true',{
-      cache:'no-store', signal:AbortSignal.timeout(8000)
+      cache:'no-store', signal:makeAbortSignal(4000)
     });
     if(r.ok){
       var j=await r.json();
@@ -4710,7 +4718,7 @@ async function loadHashrate(){
     try {
       var r2=await fetch('https://api.codetabs.com/v1/proxy?quest='+
         encodeURIComponent('https://api.blockchain.info/stats'),
-        {signal:AbortSignal.timeout(8000)});
+        {signal:makeAbortSignal(4000)});
       if(r2.ok){
         var j2=await r2.json();
         if(j2&&j2.hash_rate){
@@ -4881,96 +4889,52 @@ function calcFundingCountdown(){
 
 // ════════════════════════════════════════════════════════
 // ÖZELLİK 2: TAKER BUY/SELL ORANI
-// Binance Futures — ham alım/satım oranı
-// VPN gerekir
 // ════════════════════════════════════════════════════════
 async function loadTakerRatio(){
-  // Binance doğru endpoint: /futures/data/takerlongshortRatio
   var TAKER_URL='https://fapi.binance.com/futures/data/takerlongshortRatio?symbol=BTCUSDT&period=5m&limit=6';
-  try {
-    var r=await fetch(TAKER_URL,{cache:'no-store',signal:AbortSignal.timeout(6000)});
-    if(r.ok){
-      var j=await r.json();
-      if(j&&j.length){
-        var last=j[j.length-1];
-        var buyV=parseFloat(last.buyVol||0), sellV=parseFloat(last.sellVol||0);
-        var total=buyV+sellV;
-        if(total>0){
-          S.takerBuyPct=parseFloat((buyV/total*100).toFixed(1));
-          S.takerHistory=j.map(function(x){
-            var bv=parseFloat(x.buyVol||0),sv=parseFloat(x.sellVol||0),t=bv+sv;
-            return t>0?parseFloat((bv/t*100).toFixed(1)):50;
-          });
-        }
-        S.status['taker']='ok'; return;
-      }
+  function parseTaker(j){
+    if(!j||!j.length) return false;
+    var last=j[j.length-1];
+    var buyV=parseFloat(last.buyVol||0), sellV=parseFloat(last.sellVol||0), total=buyV+sellV;
+    if(total>0){
+      S.takerBuyPct=parseFloat((buyV/total*100).toFixed(1));
+      S.takerHistory=j.map(function(x){var b=parseFloat(x.buyVol||0),s=parseFloat(x.sellVol||0),t=b+s;return t>0?parseFloat((b/t*100).toFixed(1)):50;});
+      return true;
     }
-  } catch(e){}
-  // Proxy fallback
+    return false;
+  }
+  // Direkt ve proxy paralel dene
   try {
-    var r2=await fetch('https://corsproxy.io/?'+encodeURIComponent(TAKER_URL),{cache:'no-store',signal:AbortSignal.timeout(8000)});
-    if(r2.ok){
-      var j2=await r2.json();
-      if(j2&&j2.length){
-        var last2=j2[j2.length-1];
-        var bv2=parseFloat(last2.buyVol||0),sv2=parseFloat(last2.sellVol||0),t2=bv2+sv2;
-        if(t2>0){
-          S.takerBuyPct=parseFloat((bv2/t2*100).toFixed(1));
-          S.takerHistory=j2.map(function(x){var b=parseFloat(x.buyVol||0),s=parseFloat(x.sellVol||0),tt=b+s;return tt>0?parseFloat((b/tt*100).toFixed(1)):50;});
-        }
-        S.status['taker']='prx'; return;
-      }
-    }
-  } catch(e){}
-  // 2. proxy fallback
-  try {
-    var r3=await fetch('https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(TAKER_URL),{cache:'no-store',signal:AbortSignal.timeout(8000)});
-    if(r3.ok){
-      var j3=await r3.json();
-      if(j3&&j3.length){
-        var last3=j3[j3.length-1];
-        var bv3=parseFloat(last3.buyVol||0),sv3=parseFloat(last3.sellVol||0),t3=bv3+sv3;
-        if(t3>0){
-          S.takerBuyPct=parseFloat((bv3/t3*100).toFixed(1));
-          S.takerHistory=j3.map(function(x){var b=parseFloat(x.buyVol||0),s=parseFloat(x.sellVol||0),tt=b+s;return tt>0?parseFloat((b/tt*100).toFixed(1)):50;});
-        }
-        S.status['taker']='prx2'; return;
-      }
-    }
+    var res=await Promise.race([
+      fetch(TAKER_URL,{cache:'no-store',signal:makeAbortSignal(4000)}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
+      fetch('https://corsproxy.io/?'+encodeURIComponent(TAKER_URL),{cache:'no-store',signal:makeAbortSignal(5000)}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
+    ]);
+    if(parseTaker(res)){ S.status['taker']='ok'; return; }
   } catch(e){}
   S.status['taker']='err';
 }
 
 // ════════════════════════════════════════════════════════
 // ÖZELLİK 3: CROSS-EXCHANGE BASIS (Binance vs Bybit)
-// Fiyat farkı arbitraj sinyali
-// VPN gerekir
 // ════════════════════════════════════════════════════════
 async function loadCrossExchangeBasis(){
-  try {
-    var r=await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT',{cache:'no-store',signal:AbortSignal.timeout(6000)});
-    if(r.ok){
-      var j=await r.json();
-      if(j&&j.result&&j.result.list&&j.result.list[0]){
-        S.bybitPrice=parseFloat(j.result.list[0].lastPrice);
-        if(S.price&&S.bybitPrice){
-          S.crossBasis=parseFloat(((S.price-S.bybitPrice)/S.bybitPrice*100).toFixed(4));
-        }
-        S.status['bybit']='ok'; return;
-      }
+  var BYBIT_URL='https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT';
+  function parseBybit(j){
+    if(j&&j.result&&j.result.list&&j.result.list[0]){
+      S.bybitPrice=parseFloat(j.result.list[0].lastPrice);
+      if(S.price&&S.bybitPrice) S.crossBasis=parseFloat(((S.price-S.bybitPrice)/S.bybitPrice*100).toFixed(4));
+      return true;
     }
+    return false;
+  }
+  try {
+    var res=await Promise.race([
+      fetch(BYBIT_URL,{cache:'no-store',signal:makeAbortSignal(3000)}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
+      fetch('https://corsproxy.io/?'+encodeURIComponent(BYBIT_URL),{cache:'no-store',signal:makeAbortSignal(4000)}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
+    ]);
+    if(parseBybit(res)){ S.status['bybit']='ok'; return; }
   } catch(e){}
-  try {
-    var r2=await fetch('https://corsproxy.io/?'+encodeURIComponent('https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT'),{cache:'no-store',signal:AbortSignal.timeout(8000)});
-    if(r2.ok){
-      var j2=await r2.json();
-      if(j2&&j2.result&&j2.result.list&&j2.result.list[0]){
-        S.bybitPrice=parseFloat(j2.result.list[0].lastPrice);
-        if(S.price&&S.bybitPrice) S.crossBasis=parseFloat(((S.price-S.bybitPrice)/S.bybitPrice*100).toFixed(4));
-        S.status['bybit']='prx';
-      }
-    }
-  } catch(e){ S.status['bybit']='err'; }
+  S.status['bybit']='err';
 }
 
 // ════════════════════════════════════════════════════════
@@ -5204,7 +5168,7 @@ async function loadNews(){ S.status['news']='off'; return; // kaldırıldı
   async function fetchRSS(feedUrl){
     try {
       var r=await fetch(RSS2JSON+encodeURIComponent(feedUrl)+'&count=10',{
-        cache:'no-store', signal:AbortSignal.timeout(8000)
+        cache:'no-store', signal:makeAbortSignal(4000)
       });
       if(r.ok){
         var j=await r.json();
@@ -7289,35 +7253,46 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
 async function loadAll(){
   // Hata olsa bile devam et
   function safe(p){ return Promise.resolve(p).catch(function(){return null;}); }
+  // Her aşama için maksimum süre (ms) — bu süreyi geçen işlemler iptal edilir
+  function phase(ms){
+    var args=Array.prototype.slice.call(arguments,1);
+    return Promise.race([
+      Promise.all(args),
+      new Promise(function(res){setTimeout(function(){res(null);},ms);})
+    ]);
+  }
 
   prog(5,'Fiyat ve fonlama...');
-  await Promise.all([safe(loadPrice()), safe(loadFunding())]);
+  await phase(8000, safe(loadPrice()), safe(loadFunding()));
 
-  prog(14,'OI + L/S + Fonlama geçmişi...');
-  await Promise.all([safe(loadFundingHistory()), safe(loadOpenInterest()), safe(loadLongShortRatio())]);
+  prog(18,'OI + L/S + Fonlama geçmişi...');
+  await phase(9000, safe(loadFundingHistory()), safe(loadOpenInterest()), safe(loadLongShortRatio()));
 
-  prog(24,'CVD + Order Book...');
-  await Promise.all([safe(loadRealCVD()), safe(loadOrderBook()), safe(loadTakerRatio())]);
+  prog(30,'CVD + Order Book...');
+  await phase(10000, safe(loadRealCVD()), safe(loadOrderBook()), safe(loadTakerRatio()));
   calcFundingCountdown(); calcNetFlowScore();
 
-  prog(34,'Fear & Greed + Dominance...');
-  await Promise.all([safe(loadFG()), safe(loadBTCDominance()), safe(loadNasdaqProxy())]);
+  prog(42,'Fear & Greed + Dominance...');
+  await phase(8000, safe(loadFG()), safe(loadBTCDominance()), safe(loadNasdaqProxy()));
 
   // Kritik klines önce (sinyal için zorunlu)
-  prog(46,'15m + 1H klines...');
-  await Promise.all([safe(loadKlines('15m')), safe(loadKlines('1H'))]);
+  prog(56,'15m + 1H klines...');
+  await phase(10000, safe(loadKlines('15m')), safe(loadKlines('1H')));
 
-  prog(60,'30m + 4H + Likidasyon...');
-  await Promise.all([safe(loadKlines('30m')), safe(loadKlines('4H')), safe(loadLiquidations())]);
+  prog(68,'30m + 4H + Likidasyon...');
+  await phase(10000, safe(loadKlines('30m')), safe(loadKlines('4H')), safe(loadLiquidations()));
 
-  prog(74,'1D + 1W + 6H klines...');
-  await Promise.all([safe(loadKlines('1D')), safe(loadKlines('1W')), safe(loadKlines('6H'))]);
+  prog(80,'1D + 6H klines...');
+  await phase(8000, safe(loadKlines('1D')), safe(loadKlines('6H')));
+
+  // 1W arka planda — bloklama
+  safe(loadKlines('1W'));
 
   if(S.c1h&&S.h1h&&S.l1h){
     S.vpoc=calcVPOC(S.c1h,S.h1h,S.l1h,S.v1h);
     updateOIVelocity();
   }
-  prog(88,'Kalibrasyon...');
+  prog(90,'Kalibrasyon...');
   try{
     if(S.c1h&&S.h1h&&S.l1h){
       var bt=runBacktest(S.c1h,S.h1h,S.l1h,S.v1h||[],100);
@@ -7325,7 +7300,7 @@ async function loadAll(){
     }
   }catch(e){}
 
-  // Düşük öncelik - arka planda
+  // Düşük öncelik - arka planda (bloklama yok)
   safe(loadHashrate()); safe(loadCrossExchangeBasis()); safe(loadFutSpotRatio());
 
   prog(100,'V15 Hazır ✓');
@@ -8066,21 +8041,29 @@ function renScalp(){
 }
 
 async function init(){
-  // ── GÜVENLİK: 25 saniyede zorla overlay kapat ──
+  // ── GÜVENLİK: Overlay MUTLAKA kapanır ──
+  // loadAll() her aşaması max 10s ile sınırlı → toplam ~15s
+  // Polyfill sonrası fetch'ler asla askıda kalmaz
   var _safetyTimer=setTimeout(function(){
     var ov=document.getElementById('ov');
     if(ov&&!ov.classList.contains('out')){
       ov.classList.add('out');
-      toast('⚠ Bazı veriler yüklenemedi — VPN veya bağlantı kontrol et',5000);
+      toast('⚠ Bazı veriler yüklenemedi — VPN kontrol et',5000);
     }
-  },35000); // VPN+GitHub gecikmesi için 35s
+  },18000); // 18s — yeterli, loadAll max ~15s sürer
+
+  // İkinci güvenlik katmanı: 25s'de kesin kapat
+  setTimeout(function(){
+    var ov=document.getElementById('ov');
+    if(ov) ov.classList.add('out');
+  }, 25000);
 
   try{ await loadAll(); }
   catch(e){ console.warn('loadAll hata:',e); }
   finally{
     clearTimeout(_safetyTimer);
     var ov=document.getElementById('ov');
-    if(ov) setTimeout(function(){ov.classList.add('out');},300);
+    if(ov) ov.classList.add('out');
   }
 
   setTimeout(checkPendingOutcomes, 2000);
