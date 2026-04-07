@@ -37,8 +37,12 @@ body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(r
 .app{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:12px 14px}
 
 /* OVERLAY */
-#ov{position:fixed;inset:0;background:var(--bg);z-index:999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;transition:opacity .7s}
-#ov.out{opacity:0;pointer-events:none}
+#ov{position:fixed;inset:0;background:var(--bg);z-index:999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;transition:opacity .7s;
+  /* GÜVENLİK: JS hata olsa bile 20s sonra CSS animasyonu ile kapanır */
+  animation: ov-autoclose 0.7s ease-out 20s forwards;
+}
+@keyframes ov-autoclose{to{opacity:0;pointer-events:none;visibility:hidden;}}
+#ov.out{opacity:0;pointer-events:none;visibility:hidden;animation:none;}
 .ov-logo{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:6px;color:var(--O);text-transform:uppercase}
 .ov-hex{width:64px;height:64px;position:relative}
 .ov-hex svg{animation:hrot 3s linear infinite}
@@ -518,18 +522,35 @@ body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(r
 
 <script>
 // ═══════════════════════════════════════════════════
+// OVERLAY KAPAT — Sayfada JS çalışıyorsa ≤12s içinde kapanır
+// init()'e bağımlı değil — bağımsız zamanlar
+// ═══════════════════════════════════════════════════
+setTimeout(function(){var o=document.getElementById('ov');if(o)o.classList.add('out');},10000);
+setTimeout(function(){var o=document.getElementById('ov');if(o)o.classList.add('out');},14000);
+
+// ═══════════════════════════════════════════════════
+// loadAll PHASE HELPER — global scope (Samsung Internet uyumu)
+// ═══════════════════════════════════════════════════
+function loadPhase(ms, promises){
+  return Promise.race([
+    Promise.all(promises),
+    new Promise(function(resolve){ setTimeout(function(){ resolve(null); }, ms); })
+  ]);
+}
+
+// ═══════════════════════════════════════════════════
 // BTC SIGNAL PRO V15
 // MİMARİ: 3 KATMAN + PREMIUM + VERİ GÜVENİLİRLİK KALKANI
 // ═══════════════════════════════════════════════════
 
 // ── AbortSignal.timeout POLYFILL (Samsung Internet uyumu) ──
-// AbortSignal.timeout() bazı tarayıcılarda desteklenmiyor.
-// Bu fonksiyon her tarayıcıda çalışır.
 function makeAbortSignal(ms){
-  var ctrl=new AbortController();
-  var tid=setTimeout(function(){ctrl.abort();},ms);
-  ctrl.signal.addEventListener('abort',function(){clearTimeout(tid);},{once:true});
-  return ctrl.signal;
+  try {
+    var ctrl=new AbortController();
+    var tid=setTimeout(function(){try{ctrl.abort();}catch(e){}},ms);
+    try{ctrl.signal.addEventListener('abort',function(){clearTimeout(tid);},{once:true});}catch(e){}
+    return ctrl.signal;
+  } catch(e){ return undefined; } // AbortController yoksa undefined — fetch normal çalışır
 }
 
 // ── VERİ TAZELIK EŞİKLERİ (ms) ──
@@ -7251,57 +7272,48 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
 }
 
 async function loadAll(){
-  // Hata olsa bile devam et
   function safe(p){ return Promise.resolve(p).catch(function(){return null;}); }
-  // Her aşama için maksimum süre (ms) — bu süreyi geçen işlemler iptal edilir
-  function phase(ms){
-    var args=Array.prototype.slice.call(arguments,1);
-    return Promise.race([
-      Promise.all(args),
-      new Promise(function(res){setTimeout(function(){res(null);},ms);})
-    ]);
-  }
 
   prog(5,'Fiyat ve fonlama...');
-  await phase(8000, safe(loadPrice()), safe(loadFunding()));
+  await loadPhase(8000, [safe(loadPrice()), safe(loadFunding())]);
 
-  prog(18,'OI + L/S + Fonlama geçmişi...');
-  await phase(9000, safe(loadFundingHistory()), safe(loadOpenInterest()), safe(loadLongShortRatio()));
+  prog(18,'OI + L/S...');
+  await loadPhase(8000, [safe(loadFundingHistory()), safe(loadOpenInterest()), safe(loadLongShortRatio())]);
 
   prog(30,'CVD + Order Book...');
-  await phase(10000, safe(loadRealCVD()), safe(loadOrderBook()), safe(loadTakerRatio()));
-  calcFundingCountdown(); calcNetFlowScore();
+  await loadPhase(9000, [safe(loadRealCVD()), safe(loadOrderBook()), safe(loadTakerRatio())]);
+  try{ calcFundingCountdown(); calcNetFlowScore(); }catch(e){}
 
-  prog(42,'Fear & Greed + Dominance...');
-  await phase(8000, safe(loadFG()), safe(loadBTCDominance()), safe(loadNasdaqProxy()));
+  prog(42,'Fear & Greed...');
+  await loadPhase(8000, [safe(loadFG()), safe(loadBTCDominance()), safe(loadNasdaqProxy())]);
 
-  // Kritik klines önce (sinyal için zorunlu)
   prog(56,'15m + 1H klines...');
-  await phase(10000, safe(loadKlines('15m')), safe(loadKlines('1H')));
+  await loadPhase(9000, [safe(loadKlines('15m')), safe(loadKlines('1H'))]);
 
-  prog(68,'30m + 4H + Likidasyon...');
-  await phase(10000, safe(loadKlines('30m')), safe(loadKlines('4H')), safe(loadLiquidations()));
+  prog(70,'30m + 4H klines...');
+  await loadPhase(9000, [safe(loadKlines('30m')), safe(loadKlines('4H'))]);
 
-  prog(80,'1D + 6H klines...');
-  await phase(8000, safe(loadKlines('1D')), safe(loadKlines('6H')));
+  prog(82,'1D + 6H klines...');
+  await loadPhase(7000, [safe(loadKlines('1D')), safe(loadKlines('6H'))]);
 
-  // 1W arka planda — bloklama
   safe(loadKlines('1W'));
 
-  if(S.c1h&&S.h1h&&S.l1h){
-    S.vpoc=calcVPOC(S.c1h,S.h1h,S.l1h,S.v1h);
-    updateOIVelocity();
-  }
+  try{
+    if(S.c1h&&S.h1h&&S.l1h){
+      S.vpoc=calcVPOC(S.c1h,S.h1h,S.l1h,S.v1h);
+      updateOIVelocity();
+    }
+  }catch(e){}
+
   prog(90,'Kalibrasyon...');
   try{
     if(S.c1h&&S.h1h&&S.l1h){
       var bt=runBacktest(S.c1h,S.h1h,S.l1h,S.v1h||[],100);
-      if(bt){S.btRes['1H']=bt;calibrateThresholds();}
+      if(bt){S.btRes['1H']=bt; calibrateThresholds();}
     }
   }catch(e){}
 
-  // Düşük öncelik - arka planda (bloklama yok)
-  safe(loadHashrate()); safe(loadCrossExchangeBasis()); safe(loadFutSpotRatio());
+  try{ safe(loadHashrate()); safe(loadCrossExchangeBasis()); safe(loadFutSpotRatio()); }catch(e){}
 
   prog(100,'V15 Hazır ✓');
   S.lastUpd=new Date();
@@ -8040,114 +8052,154 @@ function renScalp(){
   pp.innerHTML=html;
 }
 
-async function init(){
-  // ── GÜVENLİK: Overlay MUTLAKA kapanır ──
-  // loadAll() her aşaması max 10s ile sınırlı → toplam ~15s
-  // Polyfill sonrası fetch'ler asla askıda kalmaz
-  var _safetyTimer=setTimeout(function(){
-    var ov=document.getElementById('ov');
-    if(ov&&!ov.classList.contains('out')){
-      ov.classList.add('out');
-      toast('⚠ Bazı veriler yüklenemedi — VPN kontrol et',5000);
-    }
-  },18000); // 18s — yeterli, loadAll max ~15s sürer
+// ═══════════════════════════════════════════════════
+// init() — Samsung Internet uyumlu, async wrapper olmadan
+// ═══════════════════════════════════════════════════
+function closeOverlay(){
+  var o=document.getElementById('ov');
+  if(o) o.classList.add('out');
+}
 
-  // İkinci güvenlik katmanı: 25s'de kesin kapat
-  setTimeout(function(){
-    var ov=document.getElementById('ov');
-    if(ov) ov.classList.add('out');
-  }, 25000);
+function init(){
+  // Overlay zaten 10s ve 14s'de kapanıyor (script başı)
+  // Burası loadAll()'u başlatır ve tamamlanınca kapanışı garantiler
 
-  try{ await loadAll(); }
-  catch(e){ console.warn('loadAll hata:',e); }
-  finally{
-    clearTimeout(_safetyTimer);
-    var ov=document.getElementById('ov');
-    if(ov) ov.classList.add('out');
-  }
+  loadAll()
+    .then(function(){
+      closeOverlay();
+      afterInit();
+    })
+    .catch(function(e){
+      console.warn('loadAll error:',e);
+      closeOverlay();
+      afterInit();
+    });
+}
 
+function afterInit(){
   setTimeout(checkPendingOutcomes, 2000);
   setTimeout(startOrderFlow, 4000);
-  // 1m/3m/5m ilk yükleme — init bittikten 6 saniye sonra
-  setTimeout(async function(){
-    try{ await Promise.all([loadKlines('1m'),loadKlines('3m'),loadKlines('5m')]); }catch(e){}
-    var btcTc=document.getElementById('tc-btcchart');
-    if(btcTc&&btcTc.classList.contains('on')) renBtcChart();
-  },6000);
 
-  renderAll();
-
-  // İlk yükleme sonrası aktif sekmeleri tekrar render et
-  // (VPN gecikmesi nedeniyle tab açıkken veri yoksa boş kalabilir)
+  // 1m/3m/5m klines — 6s sonra
   setTimeout(function(){
-    renderAll();
-    // Hangi sekme aktifse onu da render et
-    var activeTc=document.querySelector('.tc.on');
-    if(activeTc){
-      var tcId=activeTc.id.replace('tc-','');
-      var fakeEl={classList:{add:function(){},remove:function(){}}};
-      // Sadece render, tab switch değil
-      var renMap={scalp:renScalp,merkez:renMerkez,btcchart:renBtcChart,confluence:renConfluence,turev:renTurev,haber:renHaber,premium:renPremium,tahmin:renTahmin,log:renLog,signals:function(){renSignals();renBacktest();}};
-      if(renMap[tcId]) renMap[tcId]();
-    }
+    var safe=function(p){return Promise.resolve(p).catch(function(){return null;});};
+    loadPhase(8000, [safe(loadKlines('1m')), safe(loadKlines('3m')), safe(loadKlines('5m'))])
+      .then(function(){
+        var btcTc=document.getElementById('tc-btcchart');
+        if(btcTc&&btcTc.classList.contains('on')) renBtcChart();
+      }).catch(function(){});
+  }, 6000);
+
+  try{ renderAll(); }catch(e){}
+
+  // 3.5s sonra aktif sekmeyi yeniden render et
+  setTimeout(function(){
+    try{ renderAll(); }catch(e){}
+    try{
+      var activeTc=document.querySelector('.tc.on');
+      if(activeTc){
+        var tcId=activeTc.id.replace('tc-','');
+        var renMap={scalp:renScalp,merkez:renMerkez,btcchart:renBtcChart,
+          confluence:renConfluence,turev:renTurev,haber:renHaber,
+          premium:renPremium,tahmin:renTahmin,log:renLog,
+          signals:function(){try{renSignals();renBacktest();}catch(e){}}};
+        if(renMap[tcId]) renMap[tcId]();
+      }
+    }catch(e){}
   }, 3500);
 
+  // 1s clock interval
   setInterval(function(){
-    var e=document.getElementById('clock');
-    if(e) e.textContent=new Date().toLocaleTimeString('tr-TR');
-    updateSessionUI();
-    calcFundingCountdown();
-    var mzTc=document.getElementById('tc-merkez');
-    if(mzTc&&mzTc.classList.contains('on')) renMerkez();
+    try{
+      var e=document.getElementById('clock');
+      if(e) e.textContent=new Date().toLocaleTimeString('tr-TR');
+      updateSessionUI();
+      calcFundingCountdown();
+      var mzTc=document.getElementById('tc-merkez');
+      if(mzTc&&mzTc.classList.contains('on')) renMerkez();
+    }catch(e){}
   },1000);
 
-  setInterval(async function(){
-    try{
-      await loadPrice();
-      await Promise.all([loadOpenInterest(),loadLongShortRatio(),loadOrderBook(),loadRealCVD(),loadBasis(),loadTakerRatio(),loadCrossExchangeBasis()]);
-    }catch(e){}
-    updateOIVelocity(); check15mCandleConfirm();
-    if(S.c15m&&S.c15m.length>=20){
-      var _sc=scalpSignal();
-      if(_sc){ S.scalpConfirmBuf.push(_sc.sig); if(S.scalpConfirmBuf.length>5) S.scalpConfirmBuf.shift(); }
-    }
-    calcFundingCountdown(); calcNetFlowScore();
-    scalpSimCheck(); // BUG FIX: TP/SL pozisyon kontrolü — daha önce hiç çağrılmıyordu
-    renPrice(); checkAlarms(); renTahmin();
-    var scTc=document.getElementById('tc-scalp');
-    if(scTc&&scTc.classList.contains('on')) renScalp();
-    var mzTc=document.getElementById('tc-merkez');
-    if(mzTc&&mzTc.classList.contains('on')) renMerkez();
-    var btcTc=document.getElementById('tc-btcchart');
-    if(btcTc&&btcTc.classList.contains('on')) renBtcChart();
-    var btn=document.getElementById('refBtn');if(btn)btn.classList.remove('spin');
+  // 15s veri güncelleme
+  setInterval(function(){
+    var safe=function(p){return Promise.resolve(p).catch(function(){return null;});};
+    loadPhase(10000,[
+      safe(loadPrice()),
+      safe(loadOpenInterest()),safe(loadLongShortRatio()),
+      safe(loadOrderBook()),safe(loadRealCVD()),
+      safe(loadBasis()),safe(loadTakerRatio()),safe(loadCrossExchangeBasis())
+    ]).then(function(){
+      try{ updateOIVelocity(); check15mCandleConfirm(); }catch(e){}
+      try{
+        if(S.c15m&&S.c15m.length>=20){
+          var _sc=scalpSignal();
+          if(_sc){ S.scalpConfirmBuf.push(_sc.sig); if(S.scalpConfirmBuf.length>5) S.scalpConfirmBuf.shift(); }
+        }
+        calcFundingCountdown(); calcNetFlowScore();
+        scalpSimCheck();
+        renPrice(); checkAlarms();
+      }catch(e){}
+      try{
+        var tahminTc=document.getElementById('tc-tahmin');
+        if(tahminTc&&tahminTc.classList.contains('on')) renTahmin();
+        var scTc=document.getElementById('tc-scalp');
+        if(scTc&&scTc.classList.contains('on')) renScalp();
+        var mzTc=document.getElementById('tc-merkez');
+        if(mzTc&&mzTc.classList.contains('on')) renMerkez();
+        var btcTc=document.getElementById('tc-btcchart');
+        if(btcTc&&btcTc.classList.contains('on')) renBtcChart();
+        var btn=document.getElementById('refBtn'); if(btn) btn.classList.remove('spin');
+      }catch(e){}
+    }).catch(function(){});
   },15000);
 
-  setInterval(async function(){
-    try{
-      await loadFunding(); await loadFundingHistory();
-      await Promise.all([loadKlines('15m'),loadKlines('30m'),loadKlines('1H'),loadKlines('6H')]);
-    }catch(e){}
-    calcNetFlowScore();
-    if(S.c1h&&S.h1h&&S.l1h){
-      S.vpoc=calcVPOC(S.c1h,S.h1h,S.l1h,S.v1h);
-      try{ var bt=runBacktest(S.c1h,S.h1h,S.l1h,S.v1h||[],100); if(bt){S.btRes['1H']=bt;calibrateThresholds();} }catch(e){}
-    }
-    if(S.signalLog&&S.signalLog.length>0&&S.signalLog.length%20===0) calibrateFactorWeights();
-    renderAll();
+  // 2dk klines güncelleme
+  setInterval(function(){
+    var safe=function(p){return Promise.resolve(p).catch(function(){return null;});};
+    loadPhase(12000,[
+      safe(loadFunding()),safe(loadFundingHistory()),
+      safe(loadKlines('15m')),safe(loadKlines('30m')),
+      safe(loadKlines('1H')),safe(loadKlines('6H'))
+    ]).then(function(){
+      try{ calcNetFlowScore(); }catch(e){}
+      try{
+        if(S.c1h&&S.h1h&&S.l1h){
+          S.vpoc=calcVPOC(S.c1h,S.h1h,S.l1h,S.v1h);
+          var bt=runBacktest(S.c1h,S.h1h,S.l1h,S.v1h||[],100);
+          if(bt){S.btRes['1H']=bt; calibrateThresholds();}
+        }
+        if(S.signalLog&&S.signalLog.length>0&&S.signalLog.length%20===0) calibrateFactorWeights();
+        renderAll();
+      }catch(e){}
+    }).catch(function(){});
   },120000);
 
-  setInterval(async function(){
-    try{ await Promise.all([loadKlines('1m'),loadKlines('3m'),loadKlines('5m')]); }catch(e){}
-    var btcTc=document.getElementById('tc-btcchart');
-    if(btcTc&&btcTc.classList.contains('on')) renBtcChart();
+  // 30s kısa klines
+  setInterval(function(){
+    var safe=function(p){return Promise.resolve(p).catch(function(){return null;});};
+    loadPhase(8000,[safe(loadKlines('1m')),safe(loadKlines('3m')),safe(loadKlines('5m'))])
+      .then(function(){
+        try{
+          var btcTc=document.getElementById('tc-btcchart');
+          if(btcTc&&btcTc.classList.contains('on')) renBtcChart();
+        }catch(e){}
+      }).catch(function(){});
   },30000);
 
-  setInterval(async function(){
-    try{ await Promise.all([loadKlines('4H'),loadKlines('1D'),loadKlines('1W'),loadFG(),loadBTCDominance(),loadHashrate(),loadLiquidations(),loadNasdaqProxy()]); }catch(e){}
-    renderAll();
+  // 10dk büyük veri
+  setInterval(function(){
+    var safe=function(p){return Promise.resolve(p).catch(function(){return null;});};
+    loadPhase(15000,[
+      safe(loadKlines('4H')),safe(loadKlines('1D')),safe(loadKlines('1W')),
+      safe(loadFG()),safe(loadBTCDominance()),safe(loadHashrate()),
+      safe(loadLiquidations()),safe(loadNasdaqProxy())
+    ]).then(function(){
+      try{ renderAll(); }catch(e){}
+    }).catch(function(){});
   },600000);
 }
+
+
 async function quickRef(){
   var btn=document.getElementById('refBtn');if(btn)btn.classList.add('spin');
   try{ await loadAll(); }catch(e){}
