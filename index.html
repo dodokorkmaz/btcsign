@@ -7187,35 +7187,48 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
 }
 
 async function loadAll(){
+  // Hata olsa bile devam et
+  function safe(p){ return Promise.resolve(p).catch(function(){return null;}); }
+
   prog(5,'Fiyat ve fonlama...');
-  await Promise.all([loadPrice(),loadFunding()]);
-  prog(11,'Fonlama geçmişi...');
-  await loadFundingHistory();
-  prog(16,'OI + L/S oranı...');
-  await Promise.all([loadOpenInterest(),loadLongShortRatio(),loadFutSpotRatio()]);
-  prog(24,'CVD + Basis...');
-  await Promise.all([loadRealCVD(),loadBasis()]);
-  prog(30,'Haberler + Order Book + Taker...');
-  await Promise.all([loadOrderBook(),loadTakerRatio(),loadCrossExchangeBasis()]);
-  calcFundingCountdown();
-  calcNetFlowScore();
-  prog(38,'Fear & Greed + Dominance...');
-  await Promise.all([loadFG(),loadBTCDominance(),loadHashrate(),loadNasdaqProxy()]);
-  prog(48,'Klines yükleniyor...');
-  await Promise.all([loadKlines('1m'),loadKlines('3m'),loadKlines('5m'),loadKlines('15m'),loadKlines('30m'),loadKlines('1H')]);
-  prog(60,'Likidasyonlar + 4H + 6H...');
-  await Promise.all([loadLiquidations(),loadKlines('4H'),loadKlines('6H')]);
-  prog(80,'1D + 1W...');
-  await Promise.all([loadKlines('1D'),loadKlines('1W')]);
-  // VPOC hesapla
-  if(S.c1h&&S.h1h&&S.l1h) S.vpoc=calcVPOC(S.c1h,S.h1h,S.l1h,S.v1h);
-  updateOIVelocity();
-  prog(92,'Kalibrasyon...');
+  await Promise.all([safe(loadPrice()), safe(loadFunding())]);
+
+  prog(14,'OI + L/S + Fonlama geçmişi...');
+  await Promise.all([safe(loadFundingHistory()), safe(loadOpenInterest()), safe(loadLongShortRatio())]);
+
+  prog(24,'CVD + Order Book...');
+  await Promise.all([safe(loadRealCVD()), safe(loadOrderBook()), safe(loadTakerRatio())]);
+  calcFundingCountdown(); calcNetFlowScore();
+
+  prog(34,'Fear & Greed + Dominance...');
+  await Promise.all([safe(loadFG()), safe(loadBTCDominance()), safe(loadNasdaqProxy())]);
+
+  // Kritik klines önce (sinyal için zorunlu)
+  prog(46,'15m + 1H klines...');
+  await Promise.all([safe(loadKlines('15m')), safe(loadKlines('1H'))]);
+
+  prog(60,'30m + 4H + Likidasyon...');
+  await Promise.all([safe(loadKlines('30m')), safe(loadKlines('4H')), safe(loadLiquidations())]);
+
+  prog(74,'1D + 1W + 6H klines...');
+  await Promise.all([safe(loadKlines('1D')), safe(loadKlines('1W')), safe(loadKlines('6H'))]);
+
   if(S.c1h&&S.h1h&&S.l1h){
-    var bt=runBacktest(S.c1h,S.h1h,S.l1h,S.v1h||[],100);
-    if(bt){S.btRes['1H']=bt;calibrateThresholds();}
+    S.vpoc=calcVPOC(S.c1h,S.h1h,S.l1h,S.v1h);
+    updateOIVelocity();
   }
-  prog(100,'V13 Hazır');
+  prog(88,'Kalibrasyon...');
+  try{
+    if(S.c1h&&S.h1h&&S.l1h){
+      var bt=runBacktest(S.c1h,S.h1h,S.l1h,S.v1h||[],100);
+      if(bt){S.btRes['1H']=bt;calibrateThresholds();}
+    }
+  }catch(e){}
+
+  // Düşük öncelik - arka planda
+  safe(loadHashrate()); safe(loadCrossExchangeBasis()); safe(loadFutSpotRatio());
+
+  prog(100,'V15 Hazır ✓');
   S.lastUpd=new Date();
 }
 
@@ -7953,38 +7966,55 @@ function renScalp(){
 }
 
 async function init(){
-  await loadAll();
-  var ov=document.getElementById('ov');
-  if(ov) setTimeout(function(){ov.classList.add('out');},400);
-  // Sayfa kapanınca kaydedilen pending outcome'ları kontrol et
+  // ── GÜVENLİK: 25 saniyede zorla overlay kapat ──
+  var _safetyTimer=setTimeout(function(){
+    var ov=document.getElementById('ov');
+    if(ov&&!ov.classList.contains('out')){
+      ov.classList.add('out');
+      toast('⚠ Bazı veriler yüklenemedi — VPN veya bağlantı kontrol et',5000);
+    }
+  },25000);
+
+  try{ await loadAll(); }
+  catch(e){ console.warn('loadAll hata:',e); }
+  finally{
+    clearTimeout(_safetyTimer);
+    var ov=document.getElementById('ov');
+    if(ov) setTimeout(function(){ov.classList.add('out');},300);
+  }
+
   setTimeout(checkPendingOutcomes, 2000);
-  // Order Flow WebSocket — 3 saniye sonra başlat (sayfa yüklendikten sonra)
-  setTimeout(startOrderFlow, 3000);
+  setTimeout(startOrderFlow, 4000);
+  // 1m/3m/5m ilk yükleme — init bittikten 6 saniye sonra
+  setTimeout(async function(){
+    try{ await Promise.all([loadKlines('1m'),loadKlines('3m'),loadKlines('5m')]); }catch(e){}
+    var btcTc=document.getElementById('tc-btcchart');
+    if(btcTc&&btcTc.classList.contains('on')) renBtcChart();
+  },6000);
+
   renderAll();
+
   setInterval(function(){
     var e=document.getElementById('clock');
     if(e) e.textContent=new Date().toLocaleTimeString('tr-TR');
     updateSessionUI();
-    // Fonlama sayacını saniye bazında güncelle
     calcFundingCountdown();
     var mzTc=document.getElementById('tc-merkez');
     if(mzTc&&mzTc.classList.contains('on')) renMerkez();
   },1000);
-  // 15s: Fiyat + OI + L/S + CVD
+
   setInterval(async function(){
-    await loadPrice();
-    await Promise.all([loadOpenInterest(),loadLongShortRatio(),loadOrderBook(),loadRealCVD(),loadBasis(),loadTakerRatio(),loadCrossExchangeBasis()]);
-    updateOIVelocity();
-    check15mCandleConfirm();
-    // Scalp buffer burada güncellenir — 15s'de bir, renScalp'ta değil
+    try{
+      await loadPrice();
+      await Promise.all([loadOpenInterest(),loadLongShortRatio(),loadOrderBook(),loadRealCVD(),loadBasis(),loadTakerRatio(),loadCrossExchangeBasis()]);
+    }catch(e){}
+    updateOIVelocity(); check15mCandleConfirm();
     if(S.c15m&&S.c15m.length>=20){
       var _sc=scalpSignal();
       if(_sc){ S.scalpConfirmBuf.push(_sc.sig); if(S.scalpConfirmBuf.length>5) S.scalpConfirmBuf.shift(); }
     }
-    calcFundingCountdown(); // Fonlama geri sayım
-    calcNetFlowScore();     // Net flow skoru güncelle
-    renPrice(); checkAlarms();
-    renTahmin();
+    calcFundingCountdown(); calcNetFlowScore();
+    renPrice(); checkAlarms(); renTahmin();
     var scTc=document.getElementById('tc-scalp');
     if(scTc&&scTc.classList.contains('on')) renScalp();
     var mzTc=document.getElementById('tc-merkez');
@@ -7993,38 +8023,38 @@ async function init(){
     if(btcTc&&btcTc.classList.contains('on')) renBtcChart();
     var btn=document.getElementById('refBtn');if(btn)btn.classList.remove('spin');
   },15000);
-  // 2dk: Klines + Haberler + Fonlama geçmişi
+
   setInterval(async function(){
-    await loadFunding();
-    await loadFundingHistory();
-    await Promise.all([loadKlines('15m'),loadKlines('30m'),loadKlines('1H'),loadKlines('6H')]);
+    try{
+      await loadFunding(); await loadFundingHistory();
+      await Promise.all([loadKlines('15m'),loadKlines('30m'),loadKlines('1H'),loadKlines('6H')]);
+    }catch(e){}
     calcNetFlowScore();
     if(S.c1h&&S.h1h&&S.l1h){
       S.vpoc=calcVPOC(S.c1h,S.h1h,S.l1h,S.v1h);
-      var bt=runBacktest(S.c1h,S.h1h,S.l1h,S.v1h||[],100);
-      if(bt){S.btRes['1H']=bt;calibrateThresholds();}
+      try{ var bt=runBacktest(S.c1h,S.h1h,S.l1h,S.v1h||[],100); if(bt){S.btRes['1H']=bt;calibrateThresholds();} }catch(e){}
     }
-    // Adaptif ağırlık kalibrasyonu — her 20 sinyalde bir
     if(S.signalLog&&S.signalLog.length>0&&S.signalLog.length%20===0) calibrateFactorWeights();
     renderAll();
   },120000);
-  // 30s: 1m/3m/5m klines (kısa vade chart için)
+
   setInterval(async function(){
-    await Promise.all([loadKlines('1m'),loadKlines('3m'),loadKlines('5m')]);
-    var btcChartTc=document.getElementById('tc-btcchart');
-    if(btcChartTc&&btcChartTc.classList.contains('on')) renBtcChart();
+    try{ await Promise.all([loadKlines('1m'),loadKlines('3m'),loadKlines('5m')]); }catch(e){}
+    var btcTc=document.getElementById('tc-btcchart');
+    if(btcTc&&btcTc.classList.contains('on')) renBtcChart();
   },30000);
-  // 10dk: Günlük + Haftalık + F&G + Likidasyonlar
+
   setInterval(async function(){
-    await Promise.all([loadKlines('4H'),loadKlines('1D'),loadKlines('1W'),loadFG(),loadBTCDominance(),loadHashrate(),loadLiquidations(),loadNasdaqProxy()]);
+    try{ await Promise.all([loadKlines('4H'),loadKlines('1D'),loadKlines('1W'),loadFG(),loadBTCDominance(),loadHashrate(),loadLiquidations(),loadNasdaqProxy()]); }catch(e){}
     renderAll();
   },600000);
 }
 async function quickRef(){
   var btn=document.getElementById('refBtn');if(btn)btn.classList.add('spin');
-  await loadAll(); S.btRes={}; S._smc=null; renderAll();
+  try{ await loadAll(); }catch(e){}
+  S.btRes={}; S._smc=null; renderAll();
   if(btn)btn.classList.remove('spin');
-  toast('V13 Güncellendi');
+  toast('V15 Güncellendi');
 }
 window.addEventListener('load',init);
 window.addEventListener('resize',function(){
