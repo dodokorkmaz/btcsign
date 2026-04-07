@@ -319,15 +319,15 @@ body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(r
   <div class="tabs">
     <div class="tab" onclick="sw('scalp',this)" style="background:rgba(0,217,126,.08);border-color:rgba(0,217,126,.25);color:var(--G);font-weight:700">⚡ SCALP</div>
     <div class="tab" onclick="sw('merkez',this)" style="background:rgba(247,147,26,.1);border-color:rgba(247,147,26,.35);color:var(--O);font-weight:700">🎯 KARAR</div>
+    <div class="tab" onclick="sw('btcchart',this)" style="background:rgba(247,147,26,.08);border-color:rgba(247,147,26,.25);color:var(--O);font-weight:700">📈 BTC Chart</div>
+    <div class="tab" onclick="sw('haber',this)">🗺 Likidasyon</div>
+    <div class="tab" onclick="sw('turev',this)">Türev</div>
     <div class="tab on" onclick="sw('main',this)">Ana Sinyal</div>
     <div class="tab" onclick="sw('premium',this)" style="background:rgba(167,139,250,.08);border-color:rgba(167,139,250,.2);color:var(--P)">★ Premium</div>
     <div class="tab" onclick="sw('signals',this)">Çoklu TF</div>
     <div class="tab" onclick="sw('confluence',this)">Confluence</div>
-    <div class="tab" onclick="sw('turev',this)">Türev</div>
-    <div class="tab" onclick="sw('haber',this)">OB & Likidasyon</div>
     <div class="tab" onclick="sw('alarm',this)">Alarm</div>
     <div class="tab" onclick="sw('tahmin',this)" style="background:rgba(167,139,250,.08);border-color:rgba(167,139,250,.2);color:var(--P)">⚡ Tahmin</div>
-    <div class="tab" onclick="sw('btcchart',this)" style="background:rgba(247,147,26,.08);border-color:rgba(247,147,26,.25);color:var(--O);font-weight:700">📈 BTC Chart</div>
     <div class="tab" onclick="sw('log',this)" style="background:rgba(61,158,255,.06);border-color:rgba(61,158,255,.2);color:var(--B)">📋 Sinyal Log</div>
   </div>
   <!-- SİNYAL MERKEZİ -->
@@ -612,9 +612,9 @@ var S = {
   c4h:null, h4h:null, l4h:null, v4h:null, o4h:null,
   c30m:null, h30m:null, l30m:null,
   c15m:null, h15m:null, l15m:null, v15m:null, o15m:null,
-  c5m:null, h5m:null, l5m:null, v5m:null,
-  c3m:null, h3m:null, l3m:null, v3m:null,
-  c1m:null, h1m:null, l1m:null, v1m:null,
+  c5m:null, h5m:null, l5m:null, v5m:null, o5m:null,
+  c3m:null, h3m:null, l3m:null, v3m:null, o3m:null,
+  c1m:null, h1m:null, l1m:null, v1m:null, o1m:null,
   c6h:null, h6h:null, l6h:null,
   c1d:null, h1d:null, l1d:null, v1d:null,
   rsi:{}, macd:{}, ema:{},
@@ -4086,7 +4086,7 @@ function renBtcChart(){
   ];
   tfBtns.forEach(function(b){
     var on=_btcChartTf===b.tf;
-    html+='<div onclick="_btcChartTf=\''+b.tf+'\';renBtcChart()" style="font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 7px;border-radius:5px;cursor:pointer;'+(on?'background:rgba(247,147,26,.15);border:1px solid rgba(247,147,26,.3);color:#f7931a':'color:#8ba8cc;border:1px solid transparent')+'">'+b.lbl+'</div>';
+    html+='<div onclick="_btcChartTf=\''+b.tf+'\';var c=document.getElementById(\'btcMainCanvas\');if(c)c._tooltipBound=false;renBtcChart()" style="font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 7px;border-radius:5px;cursor:pointer;'+(on?'background:rgba(247,147,26,.15);border:1px solid rgba(247,147,26,.3);color:#f7931a':'color:#8ba8cc;border:1px solid transparent')+'">'+b.lbl+'</div>';
   });
   html+='</div></div>';
   html+='<canvas id="btcMainCanvas" height="260" style="width:100%;display:block;border-radius:6px"></canvas>';
@@ -4209,9 +4209,9 @@ function renBtcChart(){
 
     // TF'ye göre veri seç
     var tfData={
-      '1m': {cl:S.c1m, hi:S.h1m, lo:S.l1m, op:null, vols:S.v1m, maxBars:120},
-      '3m': {cl:S.c3m, hi:S.h3m, lo:S.l3m, op:null, vols:S.v3m, maxBars:100},
-      '5m': {cl:S.c5m, hi:S.h5m, lo:S.l5m, op:null, vols:S.v5m, maxBars:90},
+      '1m': {cl:S.c1m, hi:S.h1m, lo:S.l1m, op:S.o1m, vols:S.v1m, maxBars:120},
+      '3m': {cl:S.c3m, hi:S.h3m, lo:S.l3m, op:S.o3m, vols:S.v3m, maxBars:100},
+      '5m': {cl:S.c5m, hi:S.h5m, lo:S.l5m, op:S.o5m, vols:S.v5m, maxBars:90},
       '15m':{cl:S.c15m,hi:S.h15m,lo:S.l15m,op:S.o15m,vols:S.v15m,maxBars:80},
       '30m':{cl:S.c30m,hi:S.h30m,lo:S.l30m,op:null,  vols:null,   maxBars:60},
       '1H': {cl:S.c1h, hi:S.h1h, lo:S.l1h, op:S.o1h, vols:S.v1h, maxBars:72}
@@ -4401,44 +4401,46 @@ function renBtcChart(){
     ctx.fillStyle='rgba(138,168,204,.5)';ctx.font='9px IBM Plex Mono,monospace';
     ctx.fillText('BTC/USDT · '+_btcChartTf+' · '+cls.length+' mum',4,14);
 
-    // ── CROSSHAIR TOOLTIP (touch + mouse) ──
+    // ── CROSSHAIR TOOLTIP (touch + mouse) — sadece bir kez bağla ──
     var tooltip=document.getElementById('btcTooltip');
-    var canvasRect=null;
-    function showTooltip(clientX, clientY){
-      if(!canvasRect) canvasRect=canvas.getBoundingClientRect();
-      var x=clientX-canvasRect.left;
-      var i=Math.round(x/spacing);
-      if(i<0||i>=cls.length) return;
-      var cO=ops?ops[i]:(i>0?cls[i-1]:cls[i]);
-      var cC=cls[i], cH=his[i], cL=los[i];
-      var isBull=cC>=cO;
-      var pctChg=cO>0?((cC-cO)/cO*100).toFixed(2):'--';
-      tooltip.innerHTML=
-        '<span style="color:'+(isBull?'#00d97e':'#ff3b5c')+';font-weight:700">'+(isBull?'▲':'▼')+' $'+Math.round(cC).toLocaleString('tr-TR')+'</span>'
-        +'<span style="color:#8ba8cc;margin-left:6px">'+(isBull?'+':'')+pctChg+'%</span>'
-        +'<br><span style="color:#4a6a94">O:$'+Math.round(cO).toLocaleString('tr-TR')+'</span>'
-        +' <span style="color:#00d97e">H:$'+Math.round(cH).toLocaleString('tr-TR')+'</span>'
-        +' <span style="color:#ff3b5c">L:$'+Math.round(cL).toLocaleString('tr-TR')+'</span>';
-      var tx=Math.min(clientX+10, canvasRect.right-140);
-      var ty=Math.max(clientY-50, canvasRect.top+10);
-      tooltip.style.left=(tx-canvasRect.left)+'px';
-      tooltip.style.top=(ty-canvasRect.top)+'px';
-      tooltip.style.display='block';
-      // Dikey crosshair çiz
-      ctx.clearRect(0,0,W,H);
-      // Redraw everything by calling renBtcChart would be heavy, just draw crosshair line
-      ctx.strokeStyle='rgba(138,168,204,.2)';ctx.lineWidth=1;ctx.setLineDash([3,3]);
-      ctx.beginPath();ctx.moveTo(x,VPAD);ctx.lineTo(x,VPAD+chartH);ctx.stroke();
-      ctx.beginPath();ctx.moveTo(0,toY(cC));ctx.lineTo(W,toY(cC));ctx.stroke();
-      ctx.setLineDash([]);
+    if(!canvas._tooltipBound){
+      canvas._tooltipBound=true;
+      var canvasRect=null;
+      // Çizim snapshot'ı kaydet (tooltip için yeniden çizimden kaçın)
+      function showTooltip(clientX, clientY){
+        if(!canvasRect) canvasRect=canvas.getBoundingClientRect();
+        var x=clientX-canvasRect.left;
+        var i=Math.max(0,Math.min(cls.length-1,Math.round(x/spacing-0.5)));
+        var cO=ops?ops[i]:(i>0?cls[i-1]:cls[i]);
+        var cC=cls[i], cH=his[i], cL=los[i];
+        var isBull=cC>=cO;
+        var pctChg=cO>0?((cC-cO)/cO*100).toFixed(2):'--';
+        var volStr=vols&&vols[i]?(' Vol:'+vols[i].toFixed(0)):'';
+        tooltip.innerHTML=
+          '<span style="color:'+(isBull?'#00d97e':'#ff3b5c')+';font-weight:700">'+(isBull?'▲':'▼')+' $'+Math.round(cC).toLocaleString('tr-TR')+'</span>'
+          +'<span style="color:#8ba8cc;margin-left:6px">'+(isBull?'+':'')+pctChg+'%</span>'
+          +'<br><span style="color:#4a6a94">O:$'+Math.round(cO).toLocaleString('tr-TR')+'</span>'
+          +' <span style="color:#00d97e">H:$'+Math.round(cH).toLocaleString('tr-TR')+'</span>'
+          +' <span style="color:#ff3b5c">L:$'+Math.round(cL).toLocaleString('tr-TR')+'</span>'
+          +(volStr?'<br><span style="color:#3d9eff">'+volStr+'</span>':'');
+        var tx=Math.min(x+10, W-160);
+        var ty=Math.max(4, toY(cC)-50);
+        tooltip.style.left=tx+'px';
+        tooltip.style.top=ty+'px';
+        tooltip.style.display='block';
+      }
+      canvas.addEventListener('mousemove',function(e){
+        if(!canvasRect) canvasRect=canvas.getBoundingClientRect();
+        showTooltip(e.clientX,e.clientY);
+      });
+      canvas.addEventListener('mouseleave',function(){if(tooltip)tooltip.style.display='none';canvasRect=null;});
+      canvas.addEventListener('touchmove',function(e){
+        e.preventDefault();
+        if(!canvasRect) canvasRect=canvas.getBoundingClientRect();
+        if(e.touches.length>0) showTooltip(e.touches[0].clientX,e.touches[0].clientY);
+      },{passive:false});
+      canvas.addEventListener('touchend',function(){if(tooltip)tooltip.style.display='none';});
     }
-    canvas.addEventListener('mousemove',function(e){showTooltip(e.clientX,e.clientY);});
-    canvas.addEventListener('mouseleave',function(){if(tooltip)tooltip.style.display='none';});
-    canvas.addEventListener('touchmove',function(e){
-      e.preventDefault();
-      if(e.touches.length>0) showTooltip(e.touches[0].clientX,e.touches[0].clientY);
-    },{passive:false});
-    canvas.addEventListener('touchend',function(){if(tooltip)tooltip.style.display='none';});
   },60);
 }
 
@@ -4797,9 +4799,9 @@ async function loadKlines(tf){
   if(tf==='1D'){S.c1d=cl;S.h1d=hi;S.l1d=lo;S.v1d=vols; TS.klines1d=Date.now();}
   if(tf==='30m'){S.c30m=cl;S.h30m=hi;S.l30m=lo; TS.klines30m=Date.now();}
   if(tf==='15m'){S.c15m=cl;S.h15m=hi;S.l15m=lo;S.v15m=vols;S.o15m=op||null; TS.klines15m=Date.now();}
-  if(tf==='5m'){S.c5m=cl;S.h5m=hi;S.l5m=lo;S.v5m=vols; TS.klines5m=Date.now();}
-  if(tf==='3m'){S.c3m=cl;S.h3m=hi;S.l3m=lo;S.v3m=vols; TS.klines3m=Date.now();}
-  if(tf==='1m'){S.c1m=cl;S.h1m=hi;S.l1m=lo;S.v1m=vols; TS.klines1m=Date.now();}
+  if(tf==='5m'){S.c5m=cl;S.h5m=hi;S.l5m=lo;S.v5m=vols;S.o5m=op||null; TS.klines5m=Date.now();}
+  if(tf==='3m'){S.c3m=cl;S.h3m=hi;S.l3m=lo;S.v3m=vols;S.o3m=op||null; TS.klines3m=Date.now();}
+  if(tf==='1m'){S.c1m=cl;S.h1m=hi;S.l1m=lo;S.v1m=vols;S.o1m=op||null; TS.klines1m=Date.now();}
   if(tf==='6H'){S.c6h=cl;S.h6h=hi;S.l6h=lo; TS.klines6h=Date.now();}
   if(tf==='1W') TS.klines1w=Date.now();
   S.rsi[tf]=rsi(cl);
@@ -8085,6 +8087,7 @@ async function init(){
       if(_sc){ S.scalpConfirmBuf.push(_sc.sig); if(S.scalpConfirmBuf.length>5) S.scalpConfirmBuf.shift(); }
     }
     calcFundingCountdown(); calcNetFlowScore();
+    scalpSimCheck(); // BUG FIX: TP/SL pozisyon kontrolü — daha önce hiç çağrılmıyordu
     renPrice(); checkAlarms(); renTahmin();
     var scTc=document.getElementById('tc-scalp');
     if(scTc&&scTc.classList.contains('on')) renScalp();
