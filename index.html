@@ -510,6 +510,9 @@ body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(r
 // ── VERİ TAZELIK EŞİKLERİ (ms) ──
 var STALE = {
   price:    60000,    // 60 saniye
+  klines1m: 90000,    // 1.5 dakika
+  klines3m: 120000,   // 2 dakika
+  klines5m: 150000,   // 2.5 dakika
   klines15m:180000,   // 3 dakika — scalp için kritik
   klines1h: 300000,   // 5 dakika
   klines4h: 600000,   // 10 dakika
@@ -522,7 +525,8 @@ var STALE = {
 
 // ── ZAMAN DAMGALARI ──
 var TS = {
-  price:0, klines15m:0, klines1h:0, klines4h:0, klines1d:0, klines1w:0,
+  price:0, klines1m:0, klines3m:0, klines5m:0,
+  klines15m:0, klines1h:0, klines4h:0, klines1d:0, klines1w:0,
   klines30m:0, klines6h:0, funding:0, fg:0, oi:0, lsRatio:0
 };
 
@@ -593,6 +597,9 @@ var S = {
   c4h:null, h4h:null, l4h:null, v4h:null, o4h:null,
   c30m:null, h30m:null, l30m:null,
   c15m:null, h15m:null, l15m:null, v15m:null, o15m:null,
+  c5m:null, h5m:null, l5m:null, v5m:null,
+  c3m:null, h3m:null, l3m:null, v3m:null,
+  c1m:null, h1m:null, l1m:null, v1m:null,
   c6h:null, h6h:null, l6h:null,
   c1d:null, h1d:null, l1d:null, v1d:null,
   rsi:{}, macd:{}, ema:{},
@@ -600,6 +607,10 @@ var S = {
   apiErrCount:0,
   apiErrTs:0,
   _lastKararTg:null, _lastKararTgTs:0,
+  adaptiveWeights:null, adaptiveWeightCalcAt:0,
+  lsReliability:1.0,
+  ethChange24h:null, solChange24h:null,
+  nasdaqProxy:null, nasdaqProxyDir:'NEUTRAL', ethBtcDivergence:null,
   alarms: JSON.parse(localStorage.getItem('btc_alarms_v9') || '[]'),
   btRes:{},
   dynThr:{ longThr:68, shortThr:32, calibrated:false, sampleSize:0, longWR:50, shortWR:50 },
@@ -925,6 +936,41 @@ function obvTrend(cl,vols,p){
   return last>first*1.01?1:last<first*0.99?-1:0;
 }
 function volumeSpike(vols,mult){ mult=mult||1.8; if(!vols||vols.length<20) return false; var avg=vols.slice(-21,-1).reduce(function(a,b){return a+b;},0)/20; return vols[vols.length-1]>avg*mult; }
+
+// ═══ MTF ALIGNMENT — 15m/1H Uyum Kontrolü ═══
+function mtfAlignment(sig1h){
+  if(!S.c15m||S.c15m.length<30) return {aligned:null,score:0,reason:''};
+  var c=S.c15m,h=S.h15m||S.c15m,l=S.l15m||S.c15m,v=S.v15m||null;
+  var n=c.length;
+  var ema9_15=emaVal(c,9),ema20_15=emaVal(c,20),ema50_15=emaVal(c,Math.min(50,n));
+  var mom3_15=(c[n-1]-c[Math.max(0,n-4)])/c[Math.max(0,n-4)];
+  var rsi15=rsi(c.slice(-60),14);
+  var st15=supertrend(h,l,c,10,3);
+  var obv15=obvTrend(c,v,14);
+  var bullScore=0,bearScore=0,reasons=[];
+  if(ema9_15>ema20_15&&ema20_15>ema50_15){bullScore+=2;reasons.push('15m EMA yapısı yukarı');}
+  else if(ema9_15<ema20_15&&ema20_15<ema50_15){bearScore+=2;reasons.push('15m EMA yapısı aşağı');}
+  if(mom3_15>0.003){bullScore+=2;reasons.push('15m momentum pozitif');}
+  else if(mom3_15<-0.003){bearScore+=2;reasons.push('15m momentum negatif');}
+  if(st15.dir===1){bullScore+=2;reasons.push('15m Supertrend yukarı');}
+  else{bearScore+=2;reasons.push('15m Supertrend aşağı');}
+  if(obv15===1)bullScore+=1;else if(obv15===-1)bearScore+=1;
+  if(rsi15!==null){
+    if(rsi15<40){bullScore+=1;reasons.push('15m RSI düşük');}
+    else if(rsi15>60){bearScore+=1;reasons.push('15m RSI yüksek');}
+  }
+  var totalScore=bullScore+bearScore;
+  var bullPct=totalScore>0?bullScore/totalScore:0.5;
+  var aligned=null,alignScore=0;
+  if(sig1h==='LONG'){
+    if(bullPct>=0.65){aligned=true;alignScore=Math.round(bullPct*100);}
+    else if(bullPct<=0.40){aligned=false;alignScore=Math.round((1-bullPct)*100);}
+  } else if(sig1h==='SHORT'){
+    if(bullPct<=0.35){aligned=true;alignScore=Math.round((1-bullPct)*100);}
+    else if(bullPct>=0.60){aligned=false;alignScore=Math.round(bullPct*100);}
+  }
+  return{aligned:aligned,score:alignScore,bullPct:Math.round(bullPct*100),reasons:reasons,st:st15,rsi15:rsi15};
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // V15 SMC ENGINE — KillZone · AsiaRange · EqualHL · CHoCH/BOS · FVG
@@ -1505,6 +1551,20 @@ function calcFundingTrend(history) {
 // Confidence: 20-95 genişletilmiş bant (V13)
 // ═══════════════════════════════════════════════════════════════
 
+// ═══ L/S GÜVEN SKORU — Çapraz doğrulama ═══
+function calcLSReliability(){
+  if(S.lsRatio==null||S.funding==null) return 1.0;
+  var reliabilityScore=1.0;
+  var lsSignal=S.lsRatio<0.88?'BULL':S.lsRatio>1.35?'BEAR':'NEUTRAL';
+  var fundSignal=S.funding<-0.000003?'BULL':S.funding>0.00002?'BEAR':'NEUTRAL';
+  if(lsSignal!=='NEUTRAL'&&fundSignal!=='NEUTRAL'&&lsSignal!==fundSignal) reliabilityScore-=0.35;
+  if(S.oiChange!=null&&Math.abs(S.oiChange)>5) reliabilityScore-=0.20;
+  var cvdSignal=S.cvdTrend===1?'BULL':S.cvdTrend===-1?'BEAR':'NEUTRAL';
+  if(lsSignal!=='NEUTRAL'&&cvdSignal!=='NEUTRAL'&&lsSignal!==cvdSignal) reliabilityScore-=0.20;
+  S.lsReliability=Math.max(0.3,reliabilityScore);
+  return S.lsReliability;
+}
+
 function v9Signal(cl, hi, lo, vols){
   if(!cl||cl.length<50) return {
     sig:'NEUTRAL', layer1:{score:50,dir:'NOTR',factors:[]},
@@ -1619,13 +1679,19 @@ function v9Signal(cl, hi, lo, vols){
     else { L1.push({t:'OI '+S.oiChange.toFixed(1)+'% stabil',bull:null,w:0}); }
   }
 
-  // Long/Short Oranı (ağırlık korundu — güvenilir gün içi göstergesi)
+  // Long/Short Oranı (güvenilirlik çarpanı ile)
   if(S.lsRatio!=null){
-    if(S.lsRatio<0.75){ l1Bull+=3; L1.push({t:'L/S '+S.lsRatio.toFixed(2)+' → Aşırı short, long squeeze yakın',bull:true,w:3}); }
-    else if(S.lsRatio<0.88){ l1Bull+=1; L1.push({t:'L/S '+S.lsRatio.toFixed(2)+' → Short ağırlıklı',bull:true,w:1}); }
-    else if(S.lsRatio>1.7){ l1Bear+=3; L1.push({t:'L/S '+S.lsRatio.toFixed(2)+' → Kalabalık long, squeeze riski',bull:false,w:3}); }
-    else if(S.lsRatio>1.35){ l1Bear+=1; L1.push({t:'L/S '+S.lsRatio.toFixed(2)+' → Long ağırlıklı',bull:false,w:1}); }
+    var lsRel=calcLSReliability();
+    var lsRaw=0, lsBullDir=null;
+    if(S.lsRatio<0.75){ lsRaw=3; lsBullDir=true;  L1.push({t:'L/S '+S.lsRatio.toFixed(2)+' → Aşırı short, long squeeze yakın',bull:true,w:3}); }
+    else if(S.lsRatio<0.88){ lsRaw=1; lsBullDir=true; L1.push({t:'L/S '+S.lsRatio.toFixed(2)+' → Short ağırlıklı',bull:true,w:1}); }
+    else if(S.lsRatio>1.7){ lsRaw=3; lsBullDir=false; L1.push({t:'L/S '+S.lsRatio.toFixed(2)+' → Kalabalık long, squeeze riski',bull:false,w:3}); }
+    else if(S.lsRatio>1.35){ lsRaw=1; lsBullDir=false; L1.push({t:'L/S '+S.lsRatio.toFixed(2)+' → Long ağırlıklı',bull:false,w:1}); }
     else { L1.push({t:'L/S '+S.lsRatio.toFixed(2)+' dengeli',bull:null,w:0}); }
+    var lsEffective=lsRaw*lsRel;
+    if(lsBullDir===true) l1Bull+=lsEffective;
+    else if(lsBullDir===false) l1Bear+=lsEffective;
+    if(lsRel<0.70&&lsRaw>0) L1.push({t:'⚠ L/S güvenilirlik düşük (%'+Math.round(lsRel*100)+') — fonlama/CVD ile çelişiyor',bull:null,w:0});
   }
 
   // ─── YENİ: BTC Dominance Trendi ───
@@ -1654,6 +1720,26 @@ function v9Signal(cl, hi, lo, vols){
   if(S.newsLoaded&&S.news.length>0){
     if(S.newsSentScore>=60){ l1Bull+=1; L1.push({t:'Haber sentiment +'+S.newsSentScore+' → Güçlü pozitif',bull:true,w:1}); }
     else if(S.newsSentScore<=-60){ l1Bear+=1; L1.push({t:'Haber sentiment '+S.newsSentScore+' → Güçlü negatif',bull:false,w:1}); }
+  }
+
+  // ─── YENİ: Nasdaq/Risk-On Proxy (ETH+SOL ortalama 24s değişimi) ───
+  // BTC-Nasdaq korelasyonu NY seansında 0.7-0.85 → özellikle NY saatlerinde kritik
+  if(S.nasdaqProxy!=null){
+    var kzNow=getKillzoneInfo();
+    var isNYHours=kzNow.inNYKZ||kzNow.inLondonCls;
+    var nasdaqWeight=isNYHours?2:1; // NY saatinde daha güçlü etki
+    if(S.nasdaqProxyDir==='BULL'){
+      l1Bull+=nasdaqWeight;
+      L1.push({t:'Risk-On proxy (ETH+SOL +'+S.nasdaqProxy.toFixed(1)+'%) → Nasdaq bull'+(isNYHours?' [NY KZ × 2x]':''),bull:true,w:nasdaqWeight});
+    } else if(S.nasdaqProxyDir==='BEAR'){
+      l1Bear+=nasdaqWeight;
+      L1.push({t:'Risk-Off proxy (ETH+SOL '+S.nasdaqProxy.toFixed(1)+'%) → Nasdaq bear'+(isNYHours?' [NY KZ × 2x]':''),bull:false,w:nasdaqWeight});
+    }
+    // ETH/BTC diverjansı: ETH BTC'den >2% güçlüyse → altcoin season başlıyor → risk-on
+    if(S.ethBtcDivergence!=null&&Math.abs(S.ethBtcDivergence)>2){
+      if(S.ethBtcDivergence>2){ l1Bull+=1; L1.push({t:'ETH/BTC diverjans: ETH +'+(S.ethBtcDivergence).toFixed(1)+'% güçlü → Risk-on',bull:true,w:1}); }
+      else if(S.ethBtcDivergence<-2){ l1Bear+=1; L1.push({t:'ETH/BTC diverjans: BTC dominance artıyor → Risk-off',bull:false,w:1}); }
+    }
   }
 
   // ─── V12 YENİ: Fonlama 24 saatlik trend birikimi ───
@@ -1704,6 +1790,29 @@ function v9Signal(cl, hi, lo, vols){
   var lowSession=(utcH>=2&&utcH<6); // Asya-öncesi dead zone — S.sessionFilter ile kontrol edilir
 
   var l1Total=Math.max(l1Bull+l1Bear,1);
+
+  // ── ADAPTİF AĞIRLIK UYGULAMASI ──
+  if(S.adaptiveWeights){
+    var aw=S.adaptiveWeights;
+    var BASE_W={fonlama:0.28,cvd:0.28,oi:0.14,lsr:0.10,likidasyon:0.08,fib:0.05};
+    var adjBull=0,adjBear=0;
+    L1.forEach(function(f){
+      var key=null;
+      var t=(f.t||'').toLowerCase();
+      if(t.indexOf('fonlama')!==-1) key='fonlama';
+      else if(t.indexOf('cvd')!==-1) key='cvd';
+      else if(t.indexOf(' oi ')!==-1||t.indexOf('open interest')!==-1) key='oi';
+      else if(t.indexOf('l/s')!==-1) key='lsr';
+      else if(t.indexOf('likit')!==-1) key='likidasyon';
+      else if(t.indexOf('fib')!==-1) key='fib';
+      var ratio=(key&&aw[key]&&BASE_W[key])?(aw[key]/BASE_W[key]):1.0;
+      var w=(f.w||1)*ratio;
+      if(f.bull===true) adjBull+=w;
+      else if(f.bull===false) adjBear+=w;
+    });
+    if(adjBull+adjBear>0){l1Bull=adjBull;l1Bear=adjBear;l1Total=Math.max(adjBull+adjBear,1);}
+  }
+
   var l1Score=Math.round((l1Bull/l1Total)*100);
   var l1Dir=l1Score>=60?'LONG':l1Score<=40?'SHORT':'NOTR';
 
@@ -1856,6 +1965,12 @@ function v9Signal(cl, hi, lo, vols){
   var _str = detectChoCH_BOS(hi, lo, cl, 30);
   var _fvg = detectFVG(hi, lo, cl, 20);
 
+  // ── 15m FVG — Kısa vadeli giriş bölgesi ──
+  var _fvg15 = null;
+  if(S.c15m&&S.c15m.length>=15&&S.h15m&&S.l15m){
+    _fvg15 = detectFVG(S.h15m, S.l15m, S.c15m, 30);
+  }
+
   // SMC puanları L3'e eklenir (aynı skala)
   // Killzone aktifse tüm puanlar 1.25x
 
@@ -1923,14 +2038,37 @@ function v9Signal(cl, hi, lo, vols){
     }
   }
 
-  // ── FVG (Fair Value Gap) ──
+  // ── 1H FVG ──
   if (_fvg.nearBull) {
     l3Bull += Math.round(2 * _kzMult);
-    L3.push({t: 'FVG (Bull) içinde $' + Math.round(_fvg.nearBull.bottom).toLocaleString('tr-TR') + '-$' + Math.round(_fvg.nearBull.top).toLocaleString('tr-TR') + ' → LONG destek', bull: true});
+    L3.push({t: 'FVG (Bull 1H) $' + Math.round(_fvg.nearBull.bottom).toLocaleString('tr-TR') + '-$' + Math.round(_fvg.nearBull.top).toLocaleString('tr-TR') + ' → LONG destek', bull: true});
   }
   if (_fvg.nearBear) {
     l3Bear += Math.round(2 * _kzMult);
-    L3.push({t: 'FVG (Bear) içinde $' + Math.round(_fvg.nearBear.bottom).toLocaleString('tr-TR') + '-$' + Math.round(_fvg.nearBear.top).toLocaleString('tr-TR') + ' → SHORT direnç', bull: false});
+    L3.push({t: 'FVG (Bear 1H) $' + Math.round(_fvg.nearBear.bottom).toLocaleString('tr-TR') + '-$' + Math.round(_fvg.nearBear.top).toLocaleString('tr-TR') + ' → SHORT direnç', bull: false});
+  }
+
+  // ── 15m FVG — 1H'dan daha kritik (intraday giriş için) ──
+  if (_fvg15) {
+    if (_fvg15.nearBull) {
+      var fvg15BullPts = _kz.active ? 3 : 2.5;
+      l3Bull += fvg15BullPts;
+      L3.push({t: '🎯 FVG (Bull 15m) $' + Math.round(_fvg15.nearBull.bottom).toLocaleString('tr-TR') + '-$' + Math.round(_fvg15.nearBull.top).toLocaleString('tr-TR') + ' → Kısa vade LONG' + (_kz.active?' [KZ]':''), bull: true});
+    }
+    if (_fvg15.nearBear) {
+      var fvg15BearPts = _kz.active ? 3 : 2.5;
+      l3Bear += fvg15BearPts;
+      L3.push({t: '🎯 FVG (Bear 15m) $' + Math.round(_fvg15.nearBear.bottom).toLocaleString('tr-TR') + '-$' + Math.round(_fvg15.nearBear.top).toLocaleString('tr-TR') + ' → Kısa vade SHORT' + (_kz.active?' [KZ]':''), bull: false});
+    }
+    // Çift onay bonusu
+    if (_fvg.nearBull && _fvg15.nearBull) {
+      l3Bull += 1.5;
+      L3.push({t: '✅ 1H + 15m FVG confluence LONG → Güçlü giriş bölgesi', bull: true});
+    }
+    if (_fvg.nearBear && _fvg15.nearBear) {
+      l3Bear += 1.5;
+      L3.push({t: '✅ 1H + 15m FVG confluence SHORT → Güçlü giriş bölgesi', bull: false});
+    }
   }
 
   // ── Killzone Uyarısı ──
@@ -1947,7 +2085,7 @@ function v9Signal(cl, hi, lo, vols){
   var l3Dir = l3Score >= 60 ? 'LONG' : l3Score <= 40 ? 'SHORT' : 'NOTR';
 
   // SMC verisini dışa aktar (render için)
-  var _smcData = {kz: _kz, ar: _ar, ehl: _ehl, str: _str, fvg: _fvg};
+  var _smcData = {kz: _kz, ar: _ar, ehl: _ehl, str: _str, fvg: _fvg, fvg15: _fvg15};
 
   // ─── KARAR MİMARİSİ ───
   // Her katmanın oy gücü: L1:50%, L2:30%, L3:20%
@@ -1981,7 +2119,6 @@ function v9Signal(cl, hi, lo, vols){
   // ─── YENİ: Seans filtresi — düşük hacim saatlerinde sinyal engelle ───
   var sessionWarning='';
   if(lowSession&&sig!=='NEUTRAL'){
-    // 02-06 UTC arası sinyal üretme — hacim düşük, spread yüksek
     if(S.sessionFilter){
       sig='NEUTRAL';
       sessionWarning='Düşük hacim saati (02-06 UTC) — sinyal engellendi';
@@ -1989,6 +2126,25 @@ function v9Signal(cl, hi, lo, vols){
       sessionWarning='⚠ Düşük hacim saati (02-06 UTC) — dikkatli ol';
     }
   }
+
+  // ─── MTF ALIGNMENT (15m/1H uyum) ───
+  var _mtf=mtfAlignment(sig);
+  var mtfPenalty=0;
+  if(sig!=='NEUTRAL'&&_mtf.aligned!==null){
+    if(_mtf.aligned===false){
+      mtfPenalty=14;
+      if(strength==='STRONG_LONG') strength='LONG';
+      if(strength==='STRONG_SHORT') strength='SHORT';
+      reasons.unshift({text:'⚠ 15m/1H yön uyumsuz — erken giriş riski (%'+_mtf.score+')',bull:null,cat:'MTF'});
+    } else if(_mtf.aligned===true){
+      mtfPenalty=-5;
+      reasons.unshift({text:'✓ 15m/1H hizalı (%'+_mtf.score+') — güçlü giriş zamanı',bull:sig==='LONG',cat:'MTF'});
+    }
+  } else if(sig!=='NEUTRAL'&&_mtf.aligned===null&&_mtf.score===0){
+    mtfPenalty=4;
+  }
+  confidence=Math.max(20,Math.min(95,confidence-mtfPenalty));
+  S._mtfAlign=_mtf;
 
 
   // ─── V13: Volatilite rejimi ───
@@ -2258,7 +2414,53 @@ function calibrateThresholds(){
     longWR:Math.round(lWR*100),shortWR:Math.round(sWR*100)};
 }
 
-// ═══ CONFLUENCE (Makro skor — L1 benzeri ama sadece crypto-özgü) ═══
+// ═══ ADAPTİF FAKTÖR AĞIRLIK KALİBRASYONU ═══
+function calibrateFactorWeights(){
+  var log=S.signalLog;
+  if(!log||log.length<15) return;
+  var closed=log.filter(function(e){return e.outcome&&(e.outcome==='WIN'||e.outcome==='LOSS');}).slice(-30);
+  if(closed.length<15) return;
+  var factorPerf={
+    'fonlama':   {bull:{hit:0,miss:0},bear:{hit:0,miss:0}},
+    'cvd':       {bull:{hit:0,miss:0},bear:{hit:0,miss:0}},
+    'oi':        {bull:{hit:0,miss:0},bear:{hit:0,miss:0}},
+    'lsr':       {bull:{hit:0,miss:0},bear:{hit:0,miss:0}},
+    'likidasyon':{bull:{hit:0,miss:0},bear:{hit:0,miss:0}},
+    'fib':       {bull:{hit:0,miss:0},bear:{hit:0,miss:0}}
+  };
+  closed.forEach(function(entry){
+    if(!entry.factors||!entry.sig) return;
+    var won=(entry.outcome==='WIN');
+    var isLong=(entry.sig==='LONG');
+    (entry.factors||[]).forEach(function(f){
+      var key=null;
+      var fLower=(f.text||f.t||'').toLowerCase();
+      if(fLower.indexOf('fonlama')!==-1) key='fonlama';
+      else if(fLower.indexOf('cvd')!==-1) key='cvd';
+      else if(fLower.indexOf('oi ')!==-1||fLower.indexOf('open interest')!==-1) key='oi';
+      else if(fLower.indexOf('l/s')!==-1||fLower.indexOf('long/short')!==-1) key='lsr';
+      else if(fLower.indexOf('likit')!==-1) key='likidasyon';
+      else if(fLower.indexOf('fib')!==-1) key='fib';
+      if(!key||!factorPerf[key]) return;
+      var fBull=f.bull===true;
+      var correct=(isLong&&fBull&&won)||(!isLong&&!fBull&&won);
+      if(fBull){if(correct)factorPerf[key].bull.hit++;else factorPerf[key].bull.miss++;}
+      else{if(correct)factorPerf[key].bear.hit++;else factorPerf[key].bear.miss++;}
+    });
+  });
+  var BASE={fonlama:0.28,cvd:0.28,oi:0.14,lsr:0.10,likidasyon:0.08,fib:0.05};
+  var newWeights={};
+  Object.keys(BASE).forEach(function(key){
+    var p=factorPerf[key];
+    var tot=(p.bull.hit+p.bear.hit+p.bull.miss+p.bear.miss);
+    if(tot<5){newWeights[key]=BASE[key];return;}
+    var acc=(p.bull.hit+p.bear.hit)/tot;
+    var mult=acc>0.58?Math.min(1.20,1+(acc-0.55)*2):acc<0.42?Math.max(0.80,1-(0.45-acc)*2):1.0;
+    newWeights[key]=parseFloat((BASE[key]*mult).toFixed(4));
+  });
+  S.adaptiveWeights=newWeights;
+  S.adaptiveWeightCalcAt=Date.now();
+}
 function confluence(){
   var layers=[], p=S.price;
   if(S.funding!=null){
@@ -2785,7 +2987,15 @@ function renTurev(){
         color:S.hashrateChg!=null?(S.hashrateChg>5?'var(--G)':S.hashrateChg<-8?'var(--R)':'var(--Y)'):'var(--t2)'},
       {lbl:'Fear & Greed',val:S.fg?S.fg.value+' / 100':'--',note:S.fg?S.fg.label:'',color:S.fg?(S.fg.value<=30?'var(--G)':S.fg.value>=70?'var(--R)':'var(--Y)'):'var(--t2)'},
       {lbl:'24s Değişim',val:S.chg24h?fPct(S.chg24h):'--',note:S.chg24h?Math.abs(S.chg24h)>5?'Yüksek volatilite':'Normal':'',color:S.chg24h?(S.chg24h>0?'var(--G)':'var(--R)'):'var(--t2)'},
-      {lbl:'ATR 1H',val:S.c1h&&S.h1h?'$'+atr(S.h1h,S.l1h||[],S.c1h).toFixed(0):'--',note:'Ortalama gerçek aralık',color:'var(--P)'}
+      {lbl:'ATR 1H',val:S.c1h&&S.h1h?'$'+atr(S.h1h,S.l1h||[],S.c1h).toFixed(0):'--',note:'Ortalama gerçek aralık',color:'var(--P)'},
+      {lbl:'Nasdaq Proxy',
+        val:S.nasdaqProxy!=null?(S.nasdaqProxy>=0?'+':'')+S.nasdaqProxy.toFixed(1)+'%':'--',
+        note:S.nasdaqProxyDir==='BULL'?'Risk-On → BTC destekli':S.nasdaqProxyDir==='BEAR'?'Risk-Off → BTC baskılı':'Nötr · ETH+SOL ort.',
+        color:S.nasdaqProxyDir==='BULL'?'var(--G)':S.nasdaqProxyDir==='BEAR'?'var(--R)':'var(--Y)'},
+      {lbl:'ETH 24s Değişim',
+        val:S.ethChange24h!=null?(S.ethChange24h>=0?'+':'')+S.ethChange24h.toFixed(2)+'%':'--',
+        note:S.ethBtcDivergence!=null?'ETH/BTC fark: '+(S.ethBtcDivergence>=0?'+':'')+S.ethBtcDivergence.toFixed(1)+'%':'BTC korelasyon proxy',
+        color:S.ethChange24h!=null?(S.ethChange24h>0?'var(--G)':'var(--R)'):'var(--t2)'}
     ];
     tg.innerHTML=items.map(function(item){
       return '<div class="fund-item"><div class="fund-lbl">'+item.lbl+'</div><div class="fund-val" style="color:'+item.color+'">'+item.val+'</div><div class="fund-note">'+item.note+'</div></div>';
@@ -2813,19 +3023,22 @@ function renTurev(){
   var ab=document.getElementById('apiBox');
   if(ab){
     var apiSources=[
-      {name:'Fiyat (Binance)',   key:'BN-Price',  zorunlu:true},
-      {name:'Fiyat (Bitget)',    key:'Bitget',     zorunlu:false},
-      {name:'1H Klines',        key:'Huobi1H',    zorunlu:true},
-      {name:'4H Klines',        key:'Huobi4H',    zorunlu:false},
-      {name:'1D Klines',        key:'Huobi1D',    zorunlu:false},
-      {name:'1W Klines',        key:'Huobi1W',    zorunlu:false},
-      {name:'Fonlama',          key:'BN-Fund',    zorunlu:true},
-      {name:'Fear & Greed',     key:'FG',         zorunlu:true},
-      {name:'Open Interest',    key:'OI-Bitget',  zorunlu:false},
-      {name:'L/S Oranı',        key:'LS-Binance', zorunlu:false},
-      {name:'Order Book',       key:'OB',         zorunlu:false},
-      {name:'BTC Dominance',    key:'Dom',        zorunlu:false},
-      {name:'Haberler (CryptoPanic)',key:'cpanic',zorunlu:false},
+      {name:'Fiyat (Binance)',   key:'BN-Price',   zorunlu:true},
+      {name:'Fiyat (Bitget)',    key:'Bitget',      zorunlu:false},
+      {name:'1H Klines',         key:'BN-KL-1H',   zorunlu:true},
+      {name:'4H Klines',         key:'BN-KL-4H',   zorunlu:false},
+      {name:'1D Klines',         key:'BN-KL-1D',   zorunlu:false},
+      {name:'1W Klines',         key:'BN-KL-1W',   zorunlu:false},
+      {name:'15m Klines',        key:'BN-KL-15m',  zorunlu:true},
+      {name:'Fonlama',           key:'BN-Fund',    zorunlu:true},
+      {name:'Fear & Greed',      key:'FG',         zorunlu:true},
+      {name:'Open Interest',     key:'OI-Bitget',  zorunlu:false},
+      {name:'L/S Oranı',         key:'LS-Binance', zorunlu:false},
+      {name:'Order Book',        key:'OB',         zorunlu:false},
+      {name:'BTC Dominance',     key:'Dom',        zorunlu:false},
+      {name:'ETH/SOL (Nasdaq proxy)',key:'nasdaq-proxy',zorunlu:false},
+      {name:'WebSocket (OF)',    key:'orderflow',  zorunlu:false},
+      {name:'Haberler (CryptoPanic)',key:'cpanic', zorunlu:false},
     ];
     var health=dataHealth();
     var healthColor=health>=80?'var(--G)':health>=50?'var(--Y)':'var(--R)';
@@ -3742,14 +3955,33 @@ function renNewsGrid(){
 // ════════════════════════════════════
 // BTC CHART SEKMESİ (V15)
 // ════════════════════════════════════
-var _btcChartHrs = 48;
+var _btcChartTf = '15m'; // Varsayılan: 15 dakika mum grafiği
 function renBtcChart(){
   var pp=document.getElementById('btcChartPanel'); if(!pp) return;
   var p=S.price||0;
-  var cl=S.c1h, hi=S.h1h, lo=S.l1h;
-  if(!cl||cl.length<10){
-    pp.innerHTML='<div style="text-align:center;padding:40px;color:#8ba8cc;font-size:11px">Veri yükleniyor...</div>';
+
+  // ── TF'ye göre veri seç ──
+  var tfMap={
+    '1m': {cl:S.c1m,hi:S.h1m,lo:S.l1m,vols:S.v1m,label:'1 Dakika'},
+    '3m': {cl:S.c3m,hi:S.h3m,lo:S.l3m,vols:S.v3m,label:'3 Dakika'},
+    '5m': {cl:S.c5m,hi:S.h5m,lo:S.l5m,vols:S.v5m,label:'5 Dakika'},
+    '15m':{cl:S.c15m,hi:S.h15m,lo:S.l15m,vols:S.v15m,label:'15 Dakika'},
+    '30m':{cl:S.c30m,hi:S.h30m,lo:S.l30m,vols:null,label:'30 Dakika'},
+    '1H': {cl:S.c1h,hi:S.h1h,lo:S.l1h,vols:S.v1h,label:'1 Saat'}
+  };
+  var td=tfMap[_btcChartTf]||tfMap['15m'];
+  var cl=td.cl||S.c1h, hi=td.hi||S.h1h, lo=td.lo||S.l1h;
+
+  // SMC her zaman 1H verisi üzerinden (kurumsal seviyeler)
+  var cl1h=S.c1h;
+  if(!cl1h||cl1h.length<10){
+    pp.innerHTML='<div style="text-align:center;padding:40px;color:#8ba8cc;font-size:11px">1H verisi yükleniyor...</div>';
     return;
+  }
+  if(!cl||cl.length<5){
+    pp.innerHTML='<div style="text-align:center;padding:40px;color:#8ba8cc;font-size:11px">'+_btcChartTf+' verisi yükleniyor... (1D/3D/5D için ~30 saniye)</div>';
+    // Fallback: 1H göster
+    cl=S.c1h; hi=S.h1h; lo=S.l1h;
   }
 
   // SMC hesapla (önbellekten veya yeni)
@@ -3757,10 +3989,20 @@ function renBtcChart(){
   if(!smc) return;
   var kz=smc.kz, ar=smc.ar, ehl=smc.ehl, str=smc.str, fvg=smc.fvg;
 
-  // Göstergeler
-  var bbV=bollinger(cl,20);
-  var vwapV=(hi&&lo&&S.v1h)?vwapCalc(hi.slice(-24),lo.slice(-24),cl.slice(-24),S.v1h.slice(-24)):null;
-  var stV=(hi&&lo)?supertrend(hi,lo,cl):null;
+  // Göstergeler — seçili TF verisinden hesapla
+  var nBB=Math.min(20,cl.length);
+  var bbV=cl.length>=5?bollinger(cl,nBB):null;
+  var vwapV=null;
+  if(hi&&lo&&td.vols&&td.vols.length===cl.length){
+    vwapV=vwapCalc(hi.slice(-Math.min(48,hi.length)),lo.slice(-Math.min(48,lo.length)),cl.slice(-Math.min(48,cl.length)),td.vols.slice(-Math.min(48,td.vols.length)));
+  } else if(S.h1h&&S.l1h&&S.v1h){
+    // Fallback: 1H VWAP
+    vwapV=vwapCalc(S.h1h.slice(-24),S.l1h.slice(-24),S.c1h.slice(-24),S.v1h.slice(-24));
+  }
+  var stV=(hi&&lo&&cl.length>=15)?supertrend(hi,lo,cl):null;
+
+  // ATR seçili TF'den
+  var atrTF=(hi&&lo&&cl.length>=15)?atr(hi.slice(-20),lo.slice(-20),cl.slice(-20)):0;
 
   var html='';
 
@@ -3772,7 +4014,7 @@ function renBtcChart(){
 
   html+='<div style="display:grid;grid-template-columns:1fr auto;gap:10px;background:#080d1a;border:1px solid #162032;border-radius:12px;padding:14px 18px;margin-bottom:10px;align-items:center">';
   html+='<div>';
-  html+='<div style="font-family:IBM Plex Mono,monospace;font-size:9px;color:#8ba8cc;letter-spacing:2px;margin-bottom:4px">BTC/USDT · 1H · CANLI</div>';
+  html+='<div style="font-family:IBM Plex Mono,monospace;font-size:9px;color:#8ba8cc;letter-spacing:2px;margin-bottom:4px">BTC/USDT · '+_btcChartTf+' · MUM GRAFİĞİ</div>';
   html+='<div style="font-family:IBM Plex Mono,monospace;font-size:34px;font-weight:700;color:#f7931a;line-height:1">$'+Math.round(p).toLocaleString('tr-TR')+'</div>';
   html+='<div style="font-family:IBM Plex Mono,monospace;font-size:12px;color:'+chgC+';margin-top:3px">'+(S.chg24h>=0?'+':'')+S.chg24h.toFixed(2)+'% (24s)</div>';
   html+='</div>';
@@ -3783,24 +4025,36 @@ function renBtcChart(){
   html+='</div>';
 
   // ── Grafik ──
-  html+='<div style="background:#0b1120;border:1px solid #162032;border-radius:12px;padding:14px;margin-bottom:10px">';
+  html+='<div style="background:#0b1120;border:1px solid #162032;border-radius:12px;padding:14px;margin-bottom:10px;position:relative">';
   html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">';
-  html+='<div style="font-family:IBM Plex Mono,monospace;font-size:9px;color:#3d9eff;letter-spacing:2px">GRAFİK · EMA20(turuncu) · EMA50(mor) · BB(sarı) · VWAP(mavi)</div>';
-  html+='<div style="display:flex;gap:4px">';
-  [12,24,48,72,168].forEach(function(h){
-    var on=_btcChartHrs===h;
-    html+='<div onclick="_btcChartHrs='+h+';renBtcChart()" style="font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 7px;border-radius:5px;cursor:pointer;'+(on?'background:rgba(247,147,26,.15);border:1px solid rgba(247,147,26,.3);color:#f7931a':'color:#8ba8cc;border:1px solid transparent')+'">'+(h===168?'7G':h===72?'3G':h+'S')+'</div>';
+  html+='<div style="font-family:IBM Plex Mono,monospace;font-size:9px;color:#3d9eff;letter-spacing:2px">GRAFİK · MUM · EMA20(turuncu) · BB(sarı) · VWAP(mavi)</div>';
+  html+='<div style="display:flex;gap:3px;flex-wrap:wrap">';
+  var tfBtns=[
+    {lbl:'1dk',tf:'1m'},
+    {lbl:'3dk',tf:'3m'},
+    {lbl:'5dk',tf:'5m'},
+    {lbl:'15dk',tf:'15m'},
+    {lbl:'30dk',tf:'30m'},
+    {lbl:'1sa',tf:'1H'}
+  ];
+  tfBtns.forEach(function(b){
+    var on=_btcChartTf===b.tf;
+    html+='<div onclick="_btcChartTf=\''+b.tf+'\';renBtcChart()" style="font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 7px;border-radius:5px;cursor:pointer;'+(on?'background:rgba(247,147,26,.15);border:1px solid rgba(247,147,26,.3);color:#f7931a':'color:#8ba8cc;border:1px solid transparent')+'">'+b.lbl+'</div>';
   });
   html+='</div></div>';
-  html+='<canvas id="btcMainCanvas" height="240" style="width:100%;display:block;border-radius:6px"></canvas>';
-  html+='<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;font-size:9px;color:#8ba8cc">';
+  html+='<canvas id="btcMainCanvas" height="260" style="width:100%;display:block;border-radius:6px"></canvas>';
+  html+='<div id="btcTooltip" style="display:none;position:absolute;background:rgba(8,13,26,.95);border:1px solid rgba(61,158,255,.3);border-radius:6px;padding:6px 10px;font-family:IBM Plex Mono,monospace;font-size:10px;color:#c8d8f0;pointer-events:none;z-index:10;white-space:nowrap"></div>';
+  html+='<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font-size:9px;color:#8ba8cc">';
   html+='<span>📈 24s Y: <b style="color:#00d97e">$'+Math.round(S.high24h||0).toLocaleString('tr-TR')+'</b></span>';
   html+='<span>📉 24s D: <b style="color:#ff3b5c">$'+Math.round(S.low24h||0).toLocaleString('tr-TR')+'</b></span>';
   if(vwapV) html+='<span>VWAP: <b style="color:#3d9eff">$'+Math.round(vwapV).toLocaleString('tr-TR')+'</b></span>';
   if(bbV){
     html+='<span>BB Üst: <b style="color:#fbbf24">$'+Math.round(bbV.upper).toLocaleString('tr-TR')+'</b></span>';
     html+='<span>BB Alt: <b style="color:#fbbf24">$'+Math.round(bbV.lower).toLocaleString('tr-TR')+'</b></span>';
+    html+='<span>BB %: <b style="color:'+(bbV.bw<0.02?'#ff3b5c':bbV.bw>0.05?'#00d97e':'#fbbf24')+'">'+(bbV.bw*100).toFixed(1)+'%</b></span>';
   }
+  if(atrTF>0) html+='<span>ATR: <b style="color:#a78bfa">$'+Math.round(atrTF).toLocaleString('tr-TR')+'</b></span>';
+  if(stV) html+='<span>ST: <b style="color:'+(stV.dir===1?'#00d97e':'#ff3b5c')+'">'+(stV.dir===1?'↑':'↓')+' $'+Math.round(stV.val).toLocaleString('tr-TR')+'</b></span>';
   html+='</div></div>';
 
   // ── SMC Seviyeler ──
@@ -3896,107 +4150,248 @@ function renBtcChart(){
 
   pp.innerHTML=html;
 
-  // ── Canvas Grafik Çiz ──
+  // ── MUM GRAFİĞİ ÇİZ ──
   setTimeout(function(){
     var canvas=document.getElementById('btcMainCanvas');
     if(!canvas) return;
     var ctx=canvas.getContext('2d');
     var W=canvas.parentElement.clientWidth-28;
-    canvas.width=W; canvas.height=240;
-    ctx.clearRect(0,0,W,240);
-    var H=240;
-    var n2=Math.min(_btcChartHrs,cl.length);
-    var cls=cl.slice(-n2), his=hi?hi.slice(-n2):cls, los=lo?lo.slice(-n2):cls;
-    if(cls.length<3) return;
+    var H=260;
+    canvas.width=W; canvas.height=H;
+    ctx.clearRect(0,0,W,H);
+
+    // TF'ye göre veri seç
+    var tfData={
+      '1m': {cl:S.c1m, hi:S.h1m, lo:S.l1m, op:null, vols:S.v1m, maxBars:120},
+      '3m': {cl:S.c3m, hi:S.h3m, lo:S.l3m, op:null, vols:S.v3m, maxBars:100},
+      '5m': {cl:S.c5m, hi:S.h5m, lo:S.l5m, op:null, vols:S.v5m, maxBars:90},
+      '15m':{cl:S.c15m,hi:S.h15m,lo:S.l15m,op:S.o15m,vols:S.v15m,maxBars:80},
+      '30m':{cl:S.c30m,hi:S.h30m,lo:S.l30m,op:null,  vols:null,   maxBars:60},
+      '1H': {cl:S.c1h, hi:S.h1h, lo:S.l1h, op:S.o1h, vols:S.v1h, maxBars:72}
+    };
+    var td=tfData[_btcChartTf]||tfData['15m'];
+    var rawCl=td.cl, rawHi=td.hi, rawLo=td.lo, rawOp=td.op, rawVol=td.vols;
+
+    if(!rawCl||rawCl.length<5){
+      ctx.fillStyle='#8ba8cc'; ctx.font='11px IBM Plex Mono,monospace';
+      ctx.fillText(_btcChartTf+' verisi yükleniyor...', W/2-80, H/2);
+      return;
+    }
+
+    var maxBars=td.maxBars;
+    var n2=Math.min(maxBars, rawCl.length);
+    var cls=rawCl.slice(-n2);
+    var his=rawHi?rawHi.slice(-n2):cls;
+    var los=rawLo?rawLo.slice(-n2):cls;
+    var ops=rawOp?rawOp.slice(-n2):null;
+    var vols=rawVol?rawVol.slice(-n2):null;
+
+    var VPAD=30; // üst boşluk
+    var BPAD=35; // alt boşluk (hacim için)
+    var chartH=H-VPAD-BPAD;
+
     var mx=Math.max.apply(null,his), mn=Math.min.apply(null,los);
-    var pad=(mx-mn)*0.1; mx+=pad; mn-=pad;
+    var pad=(mx-mn)*0.06; mx+=pad; mn-=pad;
     var rng=mx-mn||1;
-    var toY=function(v){return 22+(H-44)*(1-(v-mn)/rng);};
+    var toY=function(v){return VPAD+chartH*(1-(v-mn)/rng);};
 
-    // Grid
-    ctx.strokeStyle='rgba(22,32,50,.8)'; ctx.lineWidth=1;
-    for(var i=0;i<=5;i++){
-      var gy=22+(H-44)*i/5;
+    // ── ARKA PLAN GRİD ──
+    ctx.strokeStyle='rgba(22,32,50,.7)'; ctx.lineWidth=1;
+    for(var gi=0;gi<=5;gi++){
+      var gy=VPAD+chartH*gi/5;
       ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();
-      ctx.fillStyle='rgba(138,168,204,.45)';ctx.font='8px IBM Plex Mono,monospace';
-      ctx.fillText('$'+Math.round(mx-(mx-mn)*i/5).toLocaleString('tr-TR'),3,gy+9);
+      var priceLabel='$'+Math.round(mx-(mx-mn)*gi/5).toLocaleString('tr-TR');
+      ctx.fillStyle='rgba(138,168,204,.5)';ctx.font='8px IBM Plex Mono,monospace';
+      ctx.fillText(priceLabel,3,gy+9);
     }
 
-    // EMA50 (mor)
-    if(cls.length>=50){
-      var e50=emaArr(cls,50);
-      ctx.beginPath();ctx.moveTo(0,toY(e50[0]));
-      e50.forEach(function(v,i){ctx.lineTo(W*i/(e50.length-1),toY(v));});
-      ctx.strokeStyle='rgba(167,139,250,.55)';ctx.lineWidth=1.2;ctx.stroke();
+    // ── GÖSTERGE ÇİZGİLERİ (mumların arkasına) ──
+    // BB bantları (sarı noktalı)
+    var bbLocal=bollinger(cls,Math.min(20,cls.length));
+    if(bbLocal&&bbLocal.upper>mn&&bbLocal.lower<mx){
+      ctx.setLineDash([4,4]);
+      ctx.strokeStyle='rgba(251,191,36,.35)';ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(0,toY(bbLocal.upper));ctx.lineTo(W,toY(bbLocal.upper));ctx.stroke();
+      ctx.beginPath();ctx.moveTo(0,toY(bbLocal.lower));ctx.lineTo(W,toY(bbLocal.lower));ctx.stroke();
+      ctx.setLineDash([]);
     }
-    // EMA20 (turuncu)
-    if(cls.length>=20){
-      var e20=emaArr(cls,Math.min(20,cls.length));
-      ctx.beginPath();ctx.moveTo(0,toY(e20[0]));
-      e20.forEach(function(v,i){ctx.lineTo(W*i/(e20.length-1),toY(v));});
-      ctx.strokeStyle='rgba(247,147,26,.65)';ctx.lineWidth=1.2;ctx.stroke();
+    // VWAP (mavi noktalı) — sadece 1H verisinden al
+    if(vwapV&&vwapV>mn&&vwapV<mx){
+      ctx.setLineDash([6,3]);
+      ctx.strokeStyle='rgba(61,158,255,.5)';ctx.lineWidth=1.2;
+      ctx.beginPath();ctx.moveTo(0,toY(vwapV));ctx.lineTo(W,toY(vwapV));ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle='rgba(61,158,255,.6)';ctx.font='8px IBM Plex Mono,monospace';
+      ctx.fillText('VWAP',W-38,toY(vwapV)-3);
     }
-    // BB bantları (sarı)
-    if(bbV){
-      ctx.beginPath();ctx.moveTo(0,toY(bbV.upper));ctx.lineTo(W,toY(bbV.upper));
-      ctx.strokeStyle='rgba(251,191,36,.25)';ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.stroke();ctx.setLineDash([]);
-      ctx.beginPath();ctx.moveTo(0,toY(bbV.lower));ctx.lineTo(W,toY(bbV.lower));
-      ctx.strokeStyle='rgba(251,191,36,.25)';ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.stroke();ctx.setLineDash([]);
+    // Supertrend (yeşil/kırmızı kesik)
+    if(stV&&stV.val>mn&&stV.val<mx){
+      ctx.setLineDash([8,3]);
+      ctx.strokeStyle=stV.dir===1?'rgba(0,217,126,.5)':'rgba(255,59,92,.5)';
+      ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(0,toY(stV.val));ctx.lineTo(W,toY(stV.val));ctx.stroke();
+      ctx.setLineDash([]);
     }
-    // VWAP (mavi)
-    if(vwapV){
-      ctx.beginPath();ctx.moveTo(0,toY(vwapV));ctx.lineTo(W,toY(vwapV));
-      ctx.strokeStyle='rgba(61,158,255,.45)';ctx.lineWidth=1.2;ctx.setLineDash([6,3]);ctx.stroke();ctx.setLineDash([]);
-    }
-    // Supertrend
-    if(stV){
-      ctx.beginPath();ctx.moveTo(0,toY(stV.val));ctx.lineTo(W,toY(stV.val));
-      ctx.strokeStyle=stV.dir===1?'rgba(0,217,126,.4)':'rgba(255,59,92,.4)';
-      ctx.lineWidth=1.5;ctx.stroke();
-    }
-    // Asya Range
+    // Asya Range (kırmızı/yeşil noktalı)
     if(ar){
-      ctx.beginPath();ctx.moveTo(0,toY(ar.high));ctx.lineTo(W,toY(ar.high));
-      ctx.strokeStyle='rgba(255,59,92,.35)';ctx.lineWidth=1;ctx.setLineDash([5,3]);ctx.stroke();ctx.setLineDash([]);
-      ctx.fillStyle='rgba(255,59,92,.5)';ctx.font='8px IBM Plex Mono,monospace';
-      ctx.fillText('ASYA H',W-50,toY(ar.high)-3);
-      ctx.beginPath();ctx.moveTo(0,toY(ar.low));ctx.lineTo(W,toY(ar.low));
-      ctx.strokeStyle='rgba(0,217,126,.35)';ctx.lineWidth=1;ctx.setLineDash([5,3]);ctx.stroke();ctx.setLineDash([]);
-      ctx.fillStyle='rgba(0,217,126,.5)';ctx.fillText('ASYA L',W-50,toY(ar.low)-3);
+      if(ar.high>mn&&ar.high<mx){
+        ctx.setLineDash([5,3]);ctx.strokeStyle='rgba(255,59,92,.4)';ctx.lineWidth=1;
+        ctx.beginPath();ctx.moveTo(0,toY(ar.high));ctx.lineTo(W,toY(ar.high));ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle='rgba(255,59,92,.55)';ctx.font='8px IBM Plex Mono,monospace';
+        ctx.fillText('ASYA H',W-52,toY(ar.high)-3);
+      }
+      if(ar.low>mn&&ar.low<mx){
+        ctx.setLineDash([5,3]);ctx.strokeStyle='rgba(0,217,126,.4)';ctx.lineWidth=1;
+        ctx.beginPath();ctx.moveTo(0,toY(ar.low));ctx.lineTo(W,toY(ar.low));ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle='rgba(0,217,126,.55)';ctx.font='8px IBM Plex Mono,monospace';
+        ctx.fillText('ASYA L',W-52,toY(ar.low)-3);
+      }
     }
-    // Equal Highs (kırmızı noktalı)
+    // Equal Highs/Lows (noktalı ince)
     ehl.equalHighs.slice(0,3).forEach(function(eh){
       if(eh.level>mn&&eh.level<mx){
-        ctx.beginPath();ctx.moveTo(0,toY(eh.level));ctx.lineTo(W,toY(eh.level));
-        ctx.strokeStyle='rgba(255,59,92,.2)';ctx.lineWidth=1;ctx.setLineDash([2,4]);ctx.stroke();ctx.setLineDash([]);
+        ctx.setLineDash([2,5]);ctx.strokeStyle='rgba(255,59,92,.22)';ctx.lineWidth=1;
+        ctx.beginPath();ctx.moveTo(0,toY(eh.level));ctx.lineTo(W,toY(eh.level));ctx.stroke();
+        ctx.setLineDash([]);
       }
     });
-    // Equal Lows (yeşil noktalı)
-    ehl.equalLows.slice(0,3).forEach(function(el){
-      if(el.level>mn&&el.level<mx){
-        ctx.beginPath();ctx.moveTo(0,toY(el.level));ctx.lineTo(W,toY(el.level));
-        ctx.strokeStyle='rgba(0,217,126,.2)';ctx.lineWidth=1;ctx.setLineDash([2,4]);ctx.stroke();ctx.setLineDash([]);
+    ehl.equalLows.slice(0,3).forEach(function(el2){
+      if(el2.level>mn&&el2.level<mx){
+        ctx.setLineDash([2,5]);ctx.strokeStyle='rgba(0,217,126,.22)';ctx.lineWidth=1;
+        ctx.beginPath();ctx.moveTo(0,toY(el2.level));ctx.lineTo(W,toY(el2.level));ctx.stroke();
+        ctx.setLineDash([]);
       }
     });
-    // Ana fiyat çizgisi
-    var trend=cls[cls.length-1]>=cls[0];
-    var grad=ctx.createLinearGradient(0,0,0,H);
-    grad.addColorStop(0,trend?'rgba(0,217,126,.18)':'rgba(255,59,92,.18)');
-    grad.addColorStop(1,'rgba(0,0,0,0)');
-    ctx.beginPath();ctx.moveTo(0,toY(cls[0]));
-    cls.forEach(function(v,i){ctx.lineTo(W*i/(cls.length-1),toY(v));});
-    ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fillStyle=grad;ctx.fill();
-    ctx.beginPath();ctx.moveTo(0,toY(cls[0]));
-    cls.forEach(function(v,i){ctx.lineTo(W*i/(cls.length-1),toY(v));});
-    ctx.strokeStyle=trend?'#00d97e':'#ff3b5c';ctx.lineWidth=2;
-    ctx.shadowColor=trend?'rgba(0,217,126,.5)':'rgba(255,59,92,.5)';ctx.shadowBlur=6;
-    ctx.stroke();ctx.shadowBlur=0;
-    // Son fiyat noktası + etiketi
-    var lx=W,ly=toY(cls[cls.length-1]);
-    ctx.beginPath();ctx.arc(lx,ly,4,0,Math.PI*2);
-    ctx.fillStyle=trend?'#00d97e':'#ff3b5c';ctx.fill();
-    ctx.fillStyle='#c8d8f0';ctx.font='bold 9px IBM Plex Mono,monospace';
-    ctx.fillText('$'+Math.round(cls[cls.length-1]).toLocaleString('tr-TR'),W-78,ly-6);
+
+    // ── EMA ÇİZGİLERİ ──
+    if(cls.length>=20){
+      var e20c=emaArr(cls,Math.min(20,cls.length));
+      ctx.beginPath();ctx.moveTo(0,toY(e20c[0]));
+      e20c.forEach(function(v,i){ctx.lineTo(W*i/(e20c.length-1),toY(v));});
+      ctx.strokeStyle='rgba(247,147,26,.7)';ctx.lineWidth=1.3;ctx.stroke();
+    }
+    if(cls.length>=50){
+      var e50c=emaArr(cls,50);
+      ctx.beginPath();ctx.moveTo(0,toY(e50c[0]));
+      e50c.forEach(function(v,i){ctx.lineTo(W*i/(e50c.length-1),toY(v));});
+      ctx.strokeStyle='rgba(167,139,250,.55)';ctx.lineWidth=1.1;ctx.stroke();
+    }
+
+    // ── MUM GRAFİĞİ ──
+    var candleW=Math.max(1, Math.floor(W/cls.length)-1);
+    var halfCW=Math.max(0.5, candleW/2-0.5);
+    var spacing=W/cls.length;
+
+    for(var ci=0;ci<cls.length;ci++){
+      var cx=spacing*ci+spacing/2;
+      var cOpen=ops?ops[ci]:(ci>0?cls[ci-1]:cls[ci]);
+      var cClose=cls[ci];
+      var cHigh=his[ci];
+      var cLow=los[ci];
+      var isBull=cClose>=cOpen;
+      var bodyColor=isBull?'#00d97e':'#ff3b5c';
+      var wickColor=isBull?'rgba(0,217,126,.7)':'rgba(255,59,92,.7)';
+
+      // Fitil (wick)
+      ctx.strokeStyle=wickColor;ctx.lineWidth=1;
+      ctx.beginPath();
+      ctx.moveTo(cx, toY(cHigh));
+      ctx.lineTo(cx, toY(Math.max(cOpen,cClose)));
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx, toY(Math.min(cOpen,cClose)));
+      ctx.lineTo(cx, toY(cLow));
+      ctx.stroke();
+
+      // Gövde (body)
+      var bodyTop=toY(Math.max(cOpen,cClose));
+      var bodyBot=toY(Math.min(cOpen,cClose));
+      var bodyH=Math.max(1, bodyBot-bodyTop);
+      ctx.fillStyle=isBull?'rgba(0,217,126,.85)':'rgba(255,59,92,.85)';
+      ctx.fillRect(cx-halfCW, bodyTop, halfCW*2, bodyH);
+      // Gövde border
+      ctx.strokeStyle=bodyColor;ctx.lineWidth=0.5;
+      ctx.strokeRect(cx-halfCW, bodyTop, halfCW*2, bodyH);
+    }
+
+    // ── HACIM BARLARI (alt kısım) ──
+    if(vols&&vols.length===cls.length){
+      var maxVol=Math.max.apply(null,vols)||1;
+      var volAreaH=BPAD-5;
+      var volBaseY=H-5;
+      for(var vi=0;vi<vols.length;vi++){
+        var vx=spacing*vi+spacing/2;
+        var vRatio=vols[vi]/maxVol;
+        var vH=Math.max(1,Math.round(vRatio*volAreaH));
+        var isBullV=cls[vi]>=(ops?ops[vi]:(vi>0?cls[vi-1]:cls[vi]));
+        ctx.fillStyle=isBullV?'rgba(0,217,126,.25)':'rgba(255,59,92,.25)';
+        ctx.fillRect(vx-halfCW, volBaseY-vH, halfCW*2, vH);
+      }
+    }
+
+    // ── SON FİYAT ETİKETİ ──
+    var lastPrice=cls[cls.length-1];
+    var lastY=toY(lastPrice);
+    var isUp=lastPrice>=(ops?ops[ops.length-1]:cls[cls.length-2]||lastPrice);
+    var lastC=isUp?'#00d97e':'#ff3b5c';
+    // Yatay çizgi
+    ctx.setLineDash([3,3]);
+    ctx.strokeStyle=isUp?'rgba(0,217,126,.4)':'rgba(255,59,92,.4)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(0,lastY);ctx.lineTo(W,lastY);ctx.stroke();
+    ctx.setLineDash([]);
+    // Fiyat kutusu
+    var priceStr='$'+Math.round(lastPrice).toLocaleString('tr-TR');
+    ctx.font='bold 9px IBM Plex Mono,monospace';
+    var tw=ctx.measureText(priceStr).width+8;
+    ctx.fillStyle=lastC;
+    ctx.fillRect(W-tw-2, lastY-8, tw+2, 14);
+    ctx.fillStyle='#05070f';
+    ctx.fillText(priceStr,W-tw,lastY+3);
+
+    // TF etiketi (sol üst)
+    ctx.fillStyle='rgba(138,168,204,.5)';ctx.font='9px IBM Plex Mono,monospace';
+    ctx.fillText('BTC/USDT · '+_btcChartTf+' · '+cls.length+' mum',4,14);
+
+    // ── CROSSHAIR TOOLTIP (touch + mouse) ──
+    var tooltip=document.getElementById('btcTooltip');
+    var canvasRect=null;
+    function showTooltip(clientX, clientY){
+      if(!canvasRect) canvasRect=canvas.getBoundingClientRect();
+      var x=clientX-canvasRect.left;
+      var i=Math.round(x/spacing);
+      if(i<0||i>=cls.length) return;
+      var cO=ops?ops[i]:(i>0?cls[i-1]:cls[i]);
+      var cC=cls[i], cH=his[i], cL=los[i];
+      var isBull=cC>=cO;
+      var pctChg=cO>0?((cC-cO)/cO*100).toFixed(2):'--';
+      tooltip.innerHTML=
+        '<span style="color:'+(isBull?'#00d97e':'#ff3b5c')+';font-weight:700">'+(isBull?'▲':'▼')+' $'+Math.round(cC).toLocaleString('tr-TR')+'</span>'
+        +'<span style="color:#8ba8cc;margin-left:6px">'+(isBull?'+':'')+pctChg+'%</span>'
+        +'<br><span style="color:#4a6a94">O:$'+Math.round(cO).toLocaleString('tr-TR')+'</span>'
+        +' <span style="color:#00d97e">H:$'+Math.round(cH).toLocaleString('tr-TR')+'</span>'
+        +' <span style="color:#ff3b5c">L:$'+Math.round(cL).toLocaleString('tr-TR')+'</span>';
+      var tx=Math.min(clientX+10, canvasRect.right-140);
+      var ty=Math.max(clientY-50, canvasRect.top+10);
+      tooltip.style.left=(tx-canvasRect.left)+'px';
+      tooltip.style.top=(ty-canvasRect.top)+'px';
+      tooltip.style.display='block';
+      // Dikey crosshair çiz
+      ctx.clearRect(0,0,W,H);
+      // Redraw everything by calling renBtcChart would be heavy, just draw crosshair line
+      ctx.strokeStyle='rgba(138,168,204,.2)';ctx.lineWidth=1;ctx.setLineDash([3,3]);
+      ctx.beginPath();ctx.moveTo(x,VPAD);ctx.lineTo(x,VPAD+chartH);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(0,toY(cC));ctx.lineTo(W,toY(cC));ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    canvas.addEventListener('mousemove',function(e){showTooltip(e.clientX,e.clientY);});
+    canvas.addEventListener('mouseleave',function(){if(tooltip)tooltip.style.display='none';});
+    canvas.addEventListener('touchmove',function(e){
+      e.preventDefault();
+      if(e.touches.length>0) showTooltip(e.touches[0].clientX,e.touches[0].clientY);
+    },{passive:false});
+    canvas.addEventListener('touchend',function(){if(tooltip)tooltip.style.display='none';});
   },60);
 }
 
@@ -4162,12 +4557,54 @@ async function loadBTCDominance(){
             stable: (j.usdt_dominance_percentage||0)+(j.usdc_dominance_percentage||0)};
   });
   if(d&&d.btc!=null){
-    // BTC.D trend takibi (son 5 güncelleme)
     if(S.btcDominance!=null) S.btcDomHistory.push({val:S.btcDominance, ts:Date.now()});
     if(S.btcDomHistory.length>5) S.btcDomHistory.shift();
     S.btcDominance=d.btc;
-    // Stablecoin dominance = USDT + USDC
-    if(d.usdt!=null&&d.usdc!=null) S.stableDom=d.usdt+d.usdc;
+    if(d.stable>0) S.stableDom=d.stable;
+  }
+}
+
+// ═══ NASDAQ/SPX PROXY — BTC-Hisse Korelasyonu ═══
+// Gerçek Nasdaq verisi olmadan en iyi proxy: ETH/BTC oranı + TOTAL2 market cap değişimi
+// BTC-Nasdaq korelasyonu NY seansında 0.7-0.85 → piyasa yönü kritik
+async function loadNasdaqProxy(){
+  try {
+    // ETH/BTC kısa vadeli değişimi: risk-on artarsa ETH güçlenir → Nasdaq yukarı proxy
+    var r=await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=ETHUSDT',{
+      cache:'no-store', signal:AbortSignal.timeout(5000)
+    });
+    if(r.ok){
+      var j=await r.json();
+      if(j&&j.priceChangePercent){
+        S.ethChange24h=parseFloat(j.priceChangePercent);
+        // BTC 24s değişimi zaten var → fark hesapla
+        if(S.chg24h!==undefined){
+          // ETH güçlü BTC'den = risk-on = Nasdaq bull proxy
+          S.ethBtcDivergence=S.ethChange24h-S.chg24h;
+        }
+      }
+    }
+  } catch(e){}
+
+  try {
+    // TOTAL2 (BTC hariç kripto): altcoin season = risk-on = Nasdaq bull proxy
+    var r2=await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=SOLUSDT',{
+      cache:'no-store', signal:AbortSignal.timeout(5000)
+    });
+    if(r2.ok){
+      var j2=await r2.json();
+      if(j2&&j2.priceChangePercent){
+        S.solChange24h=parseFloat(j2.priceChangePercent);
+      }
+    }
+  } catch(e2){}
+
+  // Risk-on skoru: ETH+SOL güçlüyse piyasa risk-on → BTC long destekli
+  if(S.ethChange24h!=null&&S.solChange24h!=null){
+    var avgAlt=(S.ethChange24h+S.solChange24h)/2;
+    S.nasdaqProxy=avgAlt; // pozitif = risk-on (Nasdaq bull proxy)
+    S.nasdaqProxyDir=avgAlt>1.5?'BULL':avgAlt<-1.5?'BEAR':'NEUTRAL';
+    S.status['nasdaq-proxy']='ok';
   }
 }
 async function loadHashrate(){
@@ -4260,31 +4697,30 @@ async function loadFutSpotRatio(){
   } catch(e){}
 }
 async function loadKlines(tf){
-  // V15: Birincil kaynak Binance Futures (timestamp dahil, TR erişilebilir)
+  // V16: Birincil kaynak Binance Futures (timestamp dahil, TR erişilebilir)
   // Yedek: Bitget
-  var bnMap={'15m':'15m','30m':'30m','1H':'1h','4H':'4h','6H':'6h','1D':'1d','1W':'1w'};
+  var bnMap={'1m':'1m','3m':'3m','5m':'5m','15m':'15m','30m':'30m','1H':'1h','4H':'4h','6H':'6h','1D':'1d','1W':'1w'};
   var bgMap={'15m':'15min','30m':'30min','1H':'1hour','4H':'4hour','6H':'6Hutc','1D':'1day'};
-  var bnLimit=tf==='1W'?52:300;
+  var bnLimit=tf==='1W'?52:tf==='1m'?200:tf==='3m'?200:tf==='5m'?200:300;
   var cl=null,hi=null,lo=null,vols=null,op=null,ts=null;
 
-  // ── Birincil: Binance Futures Klines (en güvenilir, CORS açık) ──
+  // ── Birincil: Binance Futures Klines ──
   if(bnMap[tf]){
     try{
       var bnUrl='https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval='+bnMap[tf]+'&limit='+bnLimit;
       var bd=await apiFetch('BN-KL-'+tf,bnUrl,function(j){return j;});
       if(bd&&bd.length>10){
-        // Binance: [openTime,open,high,low,close,vol,closeTime,...]
         cl=bd.map(function(c){return parseFloat(c[4]);});
         hi=bd.map(function(c){return parseFloat(c[2]);});
         lo=bd.map(function(c){return parseFloat(c[3]);});
         vols=bd.map(function(c){return parseFloat(c[5]);});
         op=bd.map(function(c){return parseFloat(c[1]);});
-        ts=bd.map(function(c){return parseInt(c[0]);}); // ms timestamp
+        ts=bd.map(function(c){return parseInt(c[0]);});
       }
     }catch(e){}
   }
 
-  // ── Yedek: Bitget ──
+  // ── Yedek: Bitget (sadece 15m ve üzeri) ──
   if(!cl&&bgMap[tf]){
     var gList=tf==='6H'?['6Hutc','6H']:(bgMap[tf]?[bgMap[tf]]:[]);
     for(var gi=0;gi<gList.length;gi++){
@@ -4298,16 +4734,14 @@ async function loadKlines(tf){
           lo=d2.map(function(c){return parseFloat(c[3]);});
           vols=d2.map(function(c){return parseFloat(c[5]);});
           op=d2.map(function(c){return parseFloat(c[1]);});
-          ts=d2.map(function(c){return parseInt(c[0]);}); // ms timestamp
+          ts=d2.map(function(c){return parseInt(c[0]);});
           break;
         }
       }catch(e){}
     }
   }
 
-  if(!cl||cl.length<15) return;
-  if(!cl.every(function(v){return !isNaN(v)&&v>0;})) return;
-  if(!cl||cl.length<15) return;
+  if(!cl||cl.length<10) return;
   if(!cl.every(function(v){return !isNaN(v)&&v>0;})) return;
   if(tf==='1H'){S.c1h=cl;S.h1h=hi;S.l1h=lo;S.v1h=vols;S.o1h=op||null;S.ts1h=ts||null; TS.klines1h=Date.now();
     S.fibLevels=calcFibLevels(hi,lo,cl);
@@ -4316,6 +4750,9 @@ async function loadKlines(tf){
   if(tf==='1D'){S.c1d=cl;S.h1d=hi;S.l1d=lo;S.v1d=vols; TS.klines1d=Date.now();}
   if(tf==='30m'){S.c30m=cl;S.h30m=hi;S.l30m=lo; TS.klines30m=Date.now();}
   if(tf==='15m'){S.c15m=cl;S.h15m=hi;S.l15m=lo;S.v15m=vols;S.o15m=op||null; TS.klines15m=Date.now();}
+  if(tf==='5m'){S.c5m=cl;S.h5m=hi;S.l5m=lo;S.v5m=vols; TS.klines5m=Date.now();}
+  if(tf==='3m'){S.c3m=cl;S.h3m=hi;S.l3m=lo;S.v3m=vols; TS.klines3m=Date.now();}
+  if(tf==='1m'){S.c1m=cl;S.h1m=hi;S.l1m=lo;S.v1m=vols; TS.klines1m=Date.now();}
   if(tf==='6H'){S.c6h=cl;S.h6h=hi;S.l6h=lo; TS.klines6h=Date.now();}
   if(tf==='1W') TS.klines1w=Date.now();
   S.rsi[tf]=rsi(cl);
@@ -6763,9 +7200,9 @@ async function loadAll(){
   calcFundingCountdown();
   calcNetFlowScore();
   prog(38,'Fear & Greed + Dominance...');
-  await Promise.all([loadFG(),loadBTCDominance(),loadHashrate()]);
+  await Promise.all([loadFG(),loadBTCDominance(),loadHashrate(),loadNasdaqProxy()]);
   prog(48,'Klines yükleniyor...');
-  await Promise.all([loadKlines('15m'),loadKlines('30m'),loadKlines('1H')]);
+  await Promise.all([loadKlines('1m'),loadKlines('3m'),loadKlines('5m'),loadKlines('15m'),loadKlines('30m'),loadKlines('1H')]);
   prog(60,'Likidasyonlar + 4H + 6H...');
   await Promise.all([loadLiquidations(),loadKlines('4H'),loadKlines('6H')]);
   prog(80,'1D + 1W...');
@@ -7567,11 +8004,19 @@ async function init(){
       var bt=runBacktest(S.c1h,S.h1h,S.l1h,S.v1h||[],100);
       if(bt){S.btRes['1H']=bt;calibrateThresholds();}
     }
+    // Adaptif ağırlık kalibrasyonu — her 20 sinyalde bir
+    if(S.signalLog&&S.signalLog.length>0&&S.signalLog.length%20===0) calibrateFactorWeights();
     renderAll();
   },120000);
+  // 30s: 1m/3m/5m klines (kısa vade chart için)
+  setInterval(async function(){
+    await Promise.all([loadKlines('1m'),loadKlines('3m'),loadKlines('5m')]);
+    var btcChartTc=document.getElementById('tc-btcchart');
+    if(btcChartTc&&btcChartTc.classList.contains('on')) renBtcChart();
+  },30000);
   // 10dk: Günlük + Haftalık + F&G + Likidasyonlar
   setInterval(async function(){
-    await Promise.all([loadKlines('4H'),loadKlines('1D'),loadKlines('1W'),loadFG(),loadBTCDominance(),loadHashrate(),loadLiquidations()]);
+    await Promise.all([loadKlines('4H'),loadKlines('1D'),loadKlines('1W'),loadFG(),loadBTCDominance(),loadHashrate(),loadLiquidations(),loadNasdaqProxy()]);
     renderAll();
   },600000);
 }
@@ -7582,7 +8027,11 @@ async function quickRef(){
   toast('V13 Güncellendi');
 }
 window.addEventListener('load',init);
-window.addEventListener('resize',function(){drawChart('chartC',chartPeriod);});
+window.addEventListener('resize',function(){
+  drawChart('chartC',chartPeriod);
+  var btcTc=document.getElementById('tc-btcchart');
+  if(btcTc&&btcTc.classList.contains('on')) renBtcChart();
+});
 </script>
 </body>
 </html>
