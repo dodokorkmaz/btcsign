@@ -277,7 +277,7 @@ body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(r
 </head>
 <body>
 <div id="ov">
-  <div class="ov-logo">BTC Signal Pro V13</div>
+  <div class="ov-logo">BTC Signal Pro V15</div>
   <div class="ov-hex">
     <svg viewBox="0 0 64 64" fill="none"><polygon points="32,4 58,18 58,46 32,60 6,46 6,18" stroke="rgba(247,147,26,.3)" stroke-width="1"/><polygon points="32,12 50,22 50,42 32,52 14,42 14,22" stroke="rgba(247,147,26,.15)" stroke-width="1"/></svg>
     <div class="ov-btc">₿</div>
@@ -379,6 +379,21 @@ body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(r
     <div class="sigrid" id="sgFull"></div>
     <div class="sh">Canlı Backtest (1H · Son 80 İşlem)</div>
     <div class="bt-grid" id="wrGrid"></div>
+    <!-- BACKTEST TAM PANEL -->
+    <div class="sh">Tam Backtest & Yön Doğruluk Analizi</div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <button id="btnRunBT" onclick="runFullBacktest()" style="background:rgba(247,147,26,.12);border:1px solid rgba(247,147,26,.35);border-radius:7px;color:var(--O);padding:8px 16px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;cursor:pointer">▶ Tam Backtest</button>
+      <button onclick="resetBacktest()" style="background:rgba(255,59,92,.08);border:1px solid rgba(255,59,92,.25);border-radius:7px;color:var(--R);padding:8px 16px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer">↺ Sıfırla</button>
+    </div>
+    <div class="bt-grid" id="btSummary" style="margin-bottom:12px">
+      <div style="grid-column:1/-1;text-align:center;padding:20px;font-size:11px;color:var(--t2)">Veri yüklendikten sonra "Tam Backtest" butonuna bas.</div>
+    </div>
+    <div id="btDirRow" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px"></div>
+    <div id="btEquity" style="margin-bottom:12px"></div>
+    <div class="sh">İşlem Geçmişi</div>
+    <div style="background:var(--s1);border:1px solid var(--dim2);border-radius:10px;overflow:hidden;margin-bottom:12px">
+      <table class="bt-tbl" id="btTbl" style="width:100%"></table>
+    </div>
   </div>
 
   <!-- CONFLUENCE -->
@@ -503,7 +518,7 @@ body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(r
 
 <script>
 // ═══════════════════════════════════════════════════
-// BTC SIGNAL PRO V11.1
+// BTC SIGNAL PRO V15
 // MİMARİ: 3 KATMAN + PREMIUM + VERİ GÜVENİLİRLİK KALKANI
 // ═══════════════════════════════════════════════════
 
@@ -679,7 +694,9 @@ var S = {
     leverage:  10,
     tradeCount: parseInt(localStorage.getItem('sim_count')||'0')
   },
-  signalLog: JSON.parse(localStorage.getItem('signal_log')||'[]')
+  signalLog: JSON.parse(localStorage.getItem('signal_log')||'[]'),
+  _cachedScalp: null,
+  _cachedScalpTs: 0
 };
 var chartPeriod = 24;
 
@@ -696,14 +713,41 @@ function sw(id, el){
   el.classList.add('on');
   var tc=document.getElementById('tc-'+id);
   if(tc) tc.classList.add('on');
-  if(id==='scalp') renScalp();
-  if(id==='merkez') renMerkez();
-  if(id==='btcchart') renBtcChart();
-  if(id==='turev') renTurev();
-  if(id==='haber') renHaber();
-  if(id==='premium') renPremium();
-  if(id==='tahmin') renTahmin();
+  if(id==='scalp'){
+    renScalp();
+    // Veri henüz yüklenmediyse 3s ve 7s sonra tekrar dene
+    if(!S.c15m||!S.price){setTimeout(renScalp,3000);setTimeout(renScalp,7000);}
+  }
+  if(id==='merkez'){
+    renMerkez();
+    if(!S.c1h||!S.price){setTimeout(renMerkez,3000);setTimeout(renMerkez,7000);}
+  }
+  if(id==='btcchart'){
+    renBtcChart();
+    if(!S.c1h){setTimeout(renBtcChart,3000);}
+  }
+  if(id==='turev'){
+    renTurev();
+    if(!S.c1h){setTimeout(renTurev,3000);}
+  }
+  if(id==='haber'){
+    renHaber();
+    if(!S.c1h){setTimeout(renHaber,3000);}
+  }
+  if(id==='premium'){
+    renPremium();
+    if(!S.c1h||!S.price){setTimeout(renPremium,3000);}
+  }
+  if(id==='tahmin'){
+    renTahmin();
+    if(!S.c1h||!S.price){setTimeout(renTahmin,3000);}
+  }
   if(id==='log') renLog();
+  if(id==='signals'){
+    renSignals();
+    renBacktest();
+    if(!S.c1h){setTimeout(function(){renSignals();renBacktest();},3000);}
+  }
 }
 
 // ═══ API ═══
@@ -3037,6 +3081,8 @@ function renTurev(){
       {name:'Order Book',        key:'OB',         zorunlu:false},
       {name:'BTC Dominance',     key:'Dom',        zorunlu:false},
       {name:'ETH/SOL (Nasdaq proxy)',key:'nasdaq-proxy',zorunlu:false},
+      {name:'Taker Buy/Sell',    key:'taker',      zorunlu:false},
+      {name:'Bybit (Cross-Basis)',key:'bybit',     zorunlu:false},
       {name:'WebSocket (OF)',    key:'orderflow',  zorunlu:false},
       {name:'Haberler (CryptoPanic)',key:'cpanic', zorunlu:false},
     ];
@@ -3044,10 +3090,11 @@ function renTurev(){
     var healthColor=health>=80?'var(--G)':health>=50?'var(--Y)':'var(--R)';
     var rows=apiSources.map(function(src){
       var st=S.status[src.key];
-      var ok=st==='ok'||st==='prx';
-      var icon=!st?'○':ok?'✓':'✗';
-      var color=!st?'var(--dim)':ok?'var(--G)':'var(--R)';
-      var label=!st?'Bekleniyor':ok?(st==='prx'?'Proxy ile OK':'Direkt OK'):'Hata';
+      var isOff=st==='off';
+      var ok=st==='ok'||st==='prx'||st==='prx2'||st==='rss';
+      var icon=!st?'○':isOff?'—':ok?'✓':'✗';
+      var color=!st?'var(--dim)':isOff?'var(--dim)':ok?'var(--G)':'var(--R)';
+      var label=!st?'Bekleniyor':isOff?'Devre Dışı':ok?(st==='prx'||st==='prx2'?'Proxy ile OK':st==='rss'?'RSS OK':'Direkt OK'):'Hata';
       var zorunluBadge=src.zorunlu?'<span style="font-size:8px;padding:1px 4px;background:rgba(255,59,92,.1);color:var(--R);border-radius:2px;margin-left:4px">ZORUNLU</span>':'';
       return '<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--dim2)">'
         +'<span style="font-size:11px;color:var(--t)">'+src.name+zorunluBadge+'</span>'
@@ -5080,7 +5127,7 @@ function calcOrderFlowScore(){
   };
 }
 
-async function loadCryptoPanic(){ return; // kaldırıldı
+async function loadCryptoPanic(){ S.status['cpanic']='off'; return; // kaldırıldı
   // CryptoPanic artık ücretsiz public erişimi kapattı (404)
   // RSS haber sentimental kullan (loadNews'ten geliyor)
   if(S.newsLoaded&&S.news.length>0){
@@ -5098,7 +5145,7 @@ async function loadCryptoPanic(){ return; // kaldırıldı
   }
 }
 
-async function loadNews(){ return; // kaldırıldı
+async function loadNews(){ S.status['news']='off'; return; // kaldırıldı
   var BULL=['buy','bull','surge','rally','rise','adoption','etf','approve','ath','breakout',
             'bullish','institutional','gain','higher','recovery','rebound','soar','record',
             'milestone','support','positive','upgrade','partnership','launch','all-time'];
@@ -6546,9 +6593,12 @@ function tgBakeAndDownload(){
 
 
 function renderAll(){
-  renPrice(); renMasterPanel(); renPremium(); renSignals(); renConfluence();
+  renPrice(); renMasterPanel(); renSignals(); renConfluence();
   drawChart('chartC',chartPeriod); checkAlarms(); renAlarms(); updateSessionUI();
-  renTahmin();
+  var premTc=document.getElementById('tc-premium');
+  if(premTc&&premTc.classList.contains('on')) renPremium();
+  var tahminTc=document.getElementById('tc-tahmin');
+  if(tahminTc&&tahminTc.classList.contains('on')) renTahmin();
   var btcChartTc=document.getElementById('tc-btcchart');
   if(btcChartTc&&btcChartTc.classList.contains('on')) renBtcChart();
   var scalpTc=document.getElementById('tc-scalp');
@@ -6561,6 +6611,8 @@ function renderAll(){
   if(haberTc&&haberTc.classList.contains('on')){ renOrderFlow(); renLiqMap(); }
   var logTc=document.getElementById('tc-log');
   if(logTc&&logTc.classList.contains('on')) renLog();
+  var sigTc=document.getElementById('tc-signals');
+  if(sigTc&&sigTc.classList.contains('on')) renBacktest();
 }
 // ════════════════════════════════════════════
 // ◈ SİNYAL MERKEZİ — 3 Motor Tek Ekranda
@@ -6568,6 +6620,15 @@ function renderAll(){
 function renMerkez(){
   var pp=document.getElementById('merkezPanel'); if(!pp) return;
   var p=S.price||0;
+  // Kritik veri yoksa loading ekranı göster
+  if(!p||!S.c1h||S.c1h.length<20){
+    pp.innerHTML='<div style="background:var(--s1);border:1px solid var(--dim2);border-radius:14px;padding:30px;text-align:center">'
+      +'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:var(--t2);margin-bottom:8px">⏳ VERİ YÜKLENIYOR</div>'
+      +'<div style="font-size:10px;color:var(--dim)">Fiyat: '+(p?'✓':'bekleniyor')+' · 1H Klines: '+(S.c1h&&S.c1h.length>=20?'✓':'bekleniyor')+'</div>'
+      +'<div style="font-size:9px;color:var(--dim);margin-top:6px">VPN bağlantısını kontrol et · Otomatik yenileme devam ediyor...</div>'
+      +'</div>';
+    return;
+  }
   var html='';
 
   // ── Tüm motorları hesapla ──
@@ -7973,7 +8034,7 @@ async function init(){
       ov.classList.add('out');
       toast('⚠ Bazı veriler yüklenemedi — VPN veya bağlantı kontrol et',5000);
     }
-  },25000);
+  },35000); // VPN+GitHub gecikmesi için 35s
 
   try{ await loadAll(); }
   catch(e){ console.warn('loadAll hata:',e); }
@@ -7993,6 +8054,16 @@ async function init(){
   },6000);
 
   renderAll();
+
+  // İlk yükleme sonrası aktif sekmeleri tekrar render et
+  // (VPN gecikmesi nedeniyle tab açıkken veri yoksa boş kalabilir)
+  setTimeout(function(){
+    renderAll();
+    var scTc=document.getElementById('tc-scalp');
+    if(scTc&&scTc.classList.contains('on')) renScalp();
+    var mzTc2=document.getElementById('tc-merkez');
+    if(mzTc2&&mzTc2.classList.contains('on')) renMerkez();
+  }, 3000);
 
   setInterval(function(){
     var e=document.getElementById('clock');
@@ -8052,7 +8123,7 @@ async function init(){
 async function quickRef(){
   var btn=document.getElementById('refBtn');if(btn)btn.classList.add('spin');
   try{ await loadAll(); }catch(e){}
-  S.btRes={}; S._smc=null; renderAll();
+  S.btRes={}; S._smc=null; S._cachedScalp=null; S._cachedScalpTs=0; renderAll();
   if(btn)btn.classList.remove('spin');
   toast('V15 Güncellendi');
 }
