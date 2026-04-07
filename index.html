@@ -2963,7 +2963,7 @@ function renPrice(){
       hBadge.title='Bazı veriler eski olabilir';
     } else {
       // Proxy hata uyarısı
-      var errCount = Object.values(S.status).filter(function(v){return v==='err';}).length;
+      var errCount = Object.keys(S.status).map(function(k){return S.status[k];}).filter(function(v){return v==='err';}).length;
       if(errCount>=3){
         hBadge.textContent='⛔ PROXY HATASI ('+errCount+')';
         hBadge.style.background='rgba(255,59,92,.2)'; hBadge.style.color='var(--R)';
@@ -7226,7 +7226,7 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
   } else {
     karar='BEKLE';
     var proxyWarn='';
-    var errCount2=Object.values(S.status).filter(function(v){return v==='err';}).length;
+    var errCount2=Object.keys(S.status).map(function(k){return S.status[k];}).filter(function(v){return v==='err';}).length;
     if(errCount2>=3) proxyWarn=' · ⚠ '+errCount2+' API hatası';
     kararDetail=(conflictReason?conflictReason+' · ':'')+'L:'+longScore.toFixed(1)+' S:'+shortScore.toFixed(1)+'/'+maxScore+' puan · '+longActiveGood+'/'+totalK+' kriter'+proxyWarn;
   }
@@ -8174,6 +8174,30 @@ function onWsPriceUpdate(){
 }
 
 function init(){
+  // ── ACİL FİYAT: Her şeyden önce çalışır, 100ms içinde fiyatı gösterir ──
+  setTimeout(function(){
+    var urls=[
+      'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd',
+      'https://api.kraken.com/0/public/Ticker?pair=XBTUSD',
+      'https://api.coinpaprika.com/v1/tickers/btc-bitcoin'
+    ];
+    urls.forEach(function(url){
+      fetch(url).then(function(r){return r.ok?r.json():null;}).then(function(j){
+        if(!j||S.price>1000) return;
+        var p=0;
+        if(j.bitcoin) p=j.bitcoin.usd;
+        else if(j.result&&j.result.XXBTZUSD) p=parseFloat(j.result.XXBTZUSD.c[0]);
+        else if(j.quotes&&j.quotes.USD) p=j.quotes.USD.price;
+        if(p>1000){
+          S.price=p; S.prev=p; TS.price=Date.now(); S.status['BN-Price']='ok';
+          var e=document.getElementById('pMain');
+          if(e) e.textContent='$'+Math.round(p).toLocaleString('tr-TR');
+          toast('✅ Fiyat: $'+Math.round(p).toLocaleString('tr-TR'),2000);
+        }
+      }).catch(function(){});
+    });
+  }, 200);
+
   // İnterval'lar hemen başlar — veriden bağımsız
   startIntervals();
   // En hızlı proxy'i bul (arka planda)
