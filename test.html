@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>API Test</title>
+<style>
+body{background:#05070f;color:#c8d8f0;font-family:monospace;padding:20px;font-size:14px}
+h2{color:#f7931a;margin-bottom:20px}
+.row{display:flex;align-items:center;gap:12px;padding:10px;margin-bottom:6px;background:#0b1120;border-radius:8px;border:1px solid #162032}
+.dot{width:14px;height:14px;border-radius:50%;background:#4a6a94;flex-shrink:0}
+.dot.ok{background:#00d97e}
+.dot.err{background:#ff3b5c}
+.dot.spin{animation:sp 1s linear infinite;background:#fbbf24}
+@keyframes sp{to{transform:rotate(360deg)}}
+.name{width:180px;flex-shrink:0;color:#8ba8cc}
+.val{color:#00d97e;font-size:13px}
+.val.err{color:#ff3b5c}
+.note{font-size:11px;color:#4a6a94}
+.btn{background:#f7931a;color:#000;border:none;border-radius:8px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:20px;font-family:monospace}
+#result{margin-top:20px;padding:14px;background:#0b1120;border-radius:10px;border:2px solid #f7931a;font-size:13px;display:none}
+</style>
+</head>
+<body>
+<h2>🔍 API Tanı Aracı</h2>
+<button class="btn" onclick="runAll()">▶ TESTİ BAŞLAT</button>
+<div id="rows"></div>
+<div id="result"></div>
+
+<script>
+var tests = [
+  {name:'CoinGecko (Fiyat)', url:'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd', check:function(j){return j&&j.bitcoin&&j.bitcoin.usd>0?'BTC: $'+Math.round(j.bitcoin.usd).toLocaleString('tr-TR'):null;}},
+  {name:'Kraken (Fiyat)', url:'https://api.kraken.com/0/public/Ticker?pair=XBTUSD', check:function(j){return j&&j.result&&j.result.XXBTZUSD?'BTC: $'+Math.round(parseFloat(j.result.XXBTZUSD.c[0])).toLocaleString('tr-TR'):null;}},
+  {name:'Coinpaprika (Fiyat)', url:'https://api.coinpaprika.com/v1/tickers/btc-bitcoin', check:function(j){return j&&j.quotes&&j.quotes.USD?'BTC: $'+Math.round(j.quotes.USD.price).toLocaleString('tr-TR'):null;}},
+  {name:'Binance Spot (CORS)', url:'https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT', check:function(j){return j&&j.price?'BTC: $'+Math.round(parseFloat(j.price)).toLocaleString('tr-TR'):null;}},
+  {name:'Binance Futures (VPN)', url:'https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT', check:function(j){return j&&j.price?'BTC: $'+Math.round(parseFloat(j.price)).toLocaleString('tr-TR'):null;}},
+  {name:'allorigins.win (Proxy)', url:'https://api.allorigins.win/raw?url='+encodeURIComponent('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd'), check:function(j){return j&&j.bitcoin?'Proxy ✓ BTC: $'+Math.round(j.bitcoin.usd).toLocaleString('tr-TR'):null;}},
+  {name:'corsproxy.io (Proxy)', url:'https://corsproxy.io/?'+encodeURIComponent('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd'), check:function(j){return j&&j.bitcoin?'Proxy ✓ BTC: $'+Math.round(j.bitcoin.usd).toLocaleString('tr-TR'):null;}},
+  {name:'cors.sh (Proxy)', url:'https://proxy.cors.sh/https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd', check:function(j){return j&&j.bitcoin?'Proxy ✓ BTC: $'+Math.round(j.bitcoin.usd).toLocaleString('tr-TR'):null;}},
+  {name:'Kraken 1H Klines', url:'https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=60', check:function(j){var p=j&&j.result&&j.result.XXBTZUSD;return p&&p.length>10?p.length+' mum ✓':null;}},
+  {name:'CoinGecko OHLC', url:'https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=7', check:function(j){return j&&j.length>10?j.length+' mum ✓':null;}},
+  {name:'OKX Ticker', url:'https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT', check:function(j){return j&&j.data&&j.data[0]?'BTC: $'+Math.round(parseFloat(j.data[0].last)).toLocaleString('tr-TR'):null;}},
+  {name:'OKX Klines', url:'https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=1H&limit=10', check:function(j){return j&&j.data&&j.data.length>3?j.data.length+' mum ✓':null;}},
+];
+
+var rowEls = {};
+
+function runAll(){
+  var container = document.getElementById('rows');
+  container.innerHTML = '';
+  rowEls = {};
+  document.getElementById('result').style.display='none';
+
+  tests.forEach(function(t, i){
+    var row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<div class="dot spin" id="dot'+i+'"></div>'
+      +'<div class="name">'+t.name+'</div>'
+      +'<div class="val" id="val'+i+'">Test ediliyor...</div>';
+    container.appendChild(row);
+    rowEls[i] = row;
+
+    var done = false;
+    var tid = setTimeout(function(){
+      if(done) return; done = true;
+      document.getElementById('dot'+i).className='dot err';
+      document.getElementById('val'+i).className='val err';
+      document.getElementById('val'+i).textContent='ZAMAN AŞIMI (8s)';
+      checkDone();
+    }, 8000);
+
+    fetch(t.url)
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        if(done) return; done = true; clearTimeout(tid);
+        var msg = j ? (function(){try{return t.check(j);}catch(e){return null;}}()) : null;
+        if(msg){
+          document.getElementById('dot'+i).className='dot ok';
+          document.getElementById('val'+i).className='val';
+          document.getElementById('val'+i).textContent = msg;
+        } else {
+          document.getElementById('dot'+i).className='dot err';
+          document.getElementById('val'+i).className='val err';
+          document.getElementById('val'+i).textContent = j ? 'Yanıt geldi ama parse hatası' : 'Boş yanıt';
+        }
+        checkDone();
+      })
+      .catch(function(e){
+        if(done) return; done = true; clearTimeout(tid);
+        document.getElementById('dot'+i).className='dot err';
+        document.getElementById('val'+i).className='val err';
+        document.getElementById('val'+i).textContent = 'HATA: '+(e.message||'bilinmiyor');
+        checkDone();
+      });
+  });
+}
+
+function checkDone(){
+  var dots = document.querySelectorAll('.dot');
+  var allDone = true;
+  dots.forEach(function(d){ if(d.classList.contains('spin')) allDone=false; });
+  if(!allDone) return;
+
+  var ok=0, err=0;
+  dots.forEach(function(d){ if(d.classList.contains('ok')) ok++; else err++; });
+
+  var r = document.getElementById('result');
+  r.style.display = 'block';
+  if(ok===0){
+    r.style.borderColor='#ff3b5c';
+    r.innerHTML='<b style="color:#ff3b5c">❌ HİÇBİR API ÇALIŞMIYOR</b><br><br>'
+      +'Samsung Internet\'te şunu yap:<br>'
+      +'1. Sağ üst ⋮ → Ayarlar<br>'
+      +'2. Gizlilik ve Güvenlik<br>'
+      +'3. <b>Akıllı Önleme → KAPAT</b><br>'
+      +'4. <b>Üçüncü taraf çerezleri → İzin ver</b><br><br>'
+      +'Veya Chrome ile aç: <b>chrome://</b>';
+  } else if(ok<4){
+    r.style.borderColor='#fbbf24';
+    r.innerHTML='<b style="color:#fbbf24">⚠ '+ok+'/'+dots.length+' API çalışıyor</b><br>'
+      +'Yeşil olanlar çalışıyor. Program yalnızca bunları kullanacak.';
+  } else {
+    r.style.borderColor='#00d97e';
+    r.innerHTML='<b style="color:#00d97e">✅ '+ok+'/'+dots.length+' API çalışıyor — Program açılmalı!</b><br>'
+      +'Yeni index.html GitHub\'a yüklendi mi? URL\'ye <b>?v=3</b> ekle.';
+  }
+}
+</script>
+</body>
+</html>
