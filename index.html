@@ -38,8 +38,8 @@ body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(r
 
 /* OVERLAY */
 #ov{position:fixed;inset:0;background:var(--bg);z-index:999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;transition:opacity .7s;
-  /* GÜVENLİK: JS hata olsa bile 20s sonra CSS animasyonu ile kapanır */
-  animation: ov-autoclose 0.7s ease-out 20s forwards;
+  /* GÜVENLİK: JS hata olsa bile 25s sonra CSS animasyonu ile kapanır */
+  animation: ov-autoclose 0.7s ease-out 25s forwards;
 }
 @keyframes ov-autoclose{to{opacity:0;pointer-events:none;visibility:hidden;}}
 #ov.out{opacity:0;pointer-events:none;visibility:hidden;animation:none;}
@@ -796,19 +796,29 @@ function sw(id, el){
 }
 
 // ═══ API ═══
+// PROXY LİSTESİ: allorigins.win en güvenilir public proxy — corsproxy.io ve thingproxy yedek
 var PROXIES = [
+  function(u){ return 'https://api.allorigins.win/raw?url='+encodeURIComponent(u); },
   function(u){ return 'https://corsproxy.io/?'+encodeURIComponent(u); },
-  function(u){ return 'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(u); }
+  function(u){ return 'https://thingproxy.freeboard.io/fetch/'+u; }
 ];
 async function apiFetch(name, url, parse){
-  var stamp = url+(url.includes('?')?'&':'?')+'_t='+Date.now();
-  var sig3=makeAbortSignal(3500), sig5=makeAbortSignal(5000);
+  var stamp = url+(url.indexOf('?')>=0?'&':'?')+'_t='+Date.now();
+  // Tablet+VPN için timeout biraz uzun (5s direkt, 8s proxy)
+  var sig5=makeAbortSignal(5000), sig8a=makeAbortSignal(8000), sig8b=makeAbortSignal(8000), sig8c=makeAbortSignal(8000);
 
-  // Direkt + her iki proxy PARALEL başlat — en hızlı cevabı al
+  function tryFetch(u, sig){
+    return fetch(u, {signal:sig, mode:'cors'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .catch(function(){ return null; });
+  }
+
+  // Direkt + 3 proxy PARALEL başlat — en hızlı cevabı al
   var attempts = [
-    fetch(stamp, {cache:'no-store', signal:sig3}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
-    fetch(PROXIES[0](stamp), {cache:'no-store', signal:sig5}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
-    fetch(PROXIES[1](stamp), {cache:'no-store', signal:sig5}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
+    tryFetch(stamp, sig5),
+    tryFetch(PROXIES[0](stamp), sig8a),
+    tryFetch(PROXIES[1](stamp), sig8b),
+    tryFetch(PROXIES[2](stamp), sig8c)
   ];
 
   // İlk null-olmayan sonucu döndür
@@ -832,8 +842,8 @@ async function apiFetch(name, url, parse){
         if(pending===0&&!done){ S.status[name]='err'; resolve(null); }
       });
     });
-    // 6s timeout
-    setTimeout(function(){if(!done){done=true;S.status[name]='err';resolve(null);}},6000);
+    // 9s timeout — tablet bağlantısı için ekstra süre
+    setTimeout(function(){if(!done){done=true;S.status[name]='err';resolve(null);}},9000);
   });
 }
 
@@ -2229,26 +2239,6 @@ function v9Signal(cl, hi, lo, vols){
     }
   }
 
-  // ─── MTF ALIGNMENT (15m/1H uyum) ───
-  var _mtf=mtfAlignment(sig);
-  var mtfPenalty=0;
-  if(sig!=='NEUTRAL'&&_mtf.aligned!==null){
-    if(_mtf.aligned===false){
-      mtfPenalty=14;
-      if(strength==='STRONG_LONG') strength='LONG';
-      if(strength==='STRONG_SHORT') strength='SHORT';
-      reasons.unshift({text:'⚠ 15m/1H yön uyumsuz — erken giriş riski (%'+_mtf.score+')',bull:null,cat:'MTF'});
-    } else if(_mtf.aligned===true){
-      mtfPenalty=-5;
-      reasons.unshift({text:'✓ 15m/1H hizalı (%'+_mtf.score+') — güçlü giriş zamanı',bull:sig==='LONG',cat:'MTF'});
-    }
-  } else if(sig!=='NEUTRAL'&&_mtf.aligned===null&&_mtf.score===0){
-    mtfPenalty=4;
-  }
-  confidence=Math.max(20,Math.min(95,confidence-mtfPenalty));
-  S._mtfAlign=_mtf;
-
-
   // ─── V13: Volatilite rejimi ───
   var volNow=atrV/last;
   var volRegime=volNow>0.025?'YÜKSEK':volNow<0.008?'DÜŞÜK':'NORMAL';
@@ -2304,6 +2294,26 @@ function v9Signal(cl, hi, lo, vols){
   L2.forEach(function(f){ if(f.bull!==null) reasons.push({text:'[L2] '+f.t,bull:f.bull,cat:'L2'}); });
   L3.forEach(function(f){ if(f.bull!==null) reasons.push({text:'[L3] '+f.t,bull:f.bull,cat:'L3'}); });
   if(sessionWarning) reasons.unshift({text:'⏰ '+sessionWarning,bull:null,cat:'SYS'});
+
+  // ─── MTF ALIGNMENT (15m/1H uyum) — reasons/confidence/strength SONRA çalışır ───
+  // BUG FIX: Bu blok eskiden confidence/strength/reasons tanımlanmadan önce çalışıyordu.
+  var _mtf=mtfAlignment(sig);
+  var mtfPenalty=0;
+  if(sig!=='NEUTRAL'&&_mtf.aligned!==null){
+    if(_mtf.aligned===false){
+      mtfPenalty=14;
+      if(strength==='STRONG_LONG') strength='LONG';
+      if(strength==='STRONG_SHORT') strength='SHORT';
+      reasons.unshift({text:'⚠ 15m/1H yön uyumsuz — erken giriş riski (%'+_mtf.score+')',bull:null,cat:'MTF'});
+    } else if(_mtf.aligned===true){
+      mtfPenalty=-5;
+      reasons.unshift({text:'✓ 15m/1H hizalı (%'+_mtf.score+') — güçlü giriş zamanı',bull:sig==='LONG',cat:'MTF'});
+    }
+  } else if(sig!=='NEUTRAL'&&_mtf.aligned===null&&_mtf.score===0){
+    mtfPenalty=4;
+  }
+  confidence=Math.max(20,Math.min(95,confidence-mtfPenalty));
+  S._mtfAlign=_mtf;
 
   return {
     sig:sig, strength:strength, confidence:confidence,
@@ -3599,13 +3609,14 @@ async function loadLiquidations(){
 async function loadRealCVD(){
   var trades=null;
   var CVD_URL='https://fapi.binance.com/fapi/v1/aggTrades?symbol=BTCUSDT&limit=500';
-  // Direkt ve proxy paralel dene — hangisi önce gelirse
+  // Direkt + 3 proxy paralel dene
   try {
-    var results=await Promise.race([
-      fetch(CVD_URL,{cache:'no-store',signal:makeAbortSignal(4000)}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
-      fetch('https://corsproxy.io/?'+encodeURIComponent(CVD_URL),{cache:'no-store',signal:makeAbortSignal(5000)}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
-    ]);
-    if(results&&results.length) trades=results;
+    var cvdResults=await Promise.race([
+      fetch(CVD_URL,{signal:makeAbortSignal(5000),mode:'cors'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
+      fetch('https://api.allorigins.win/raw?url='+encodeURIComponent(CVD_URL),{signal:makeAbortSignal(8000),mode:'cors'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
+      fetch('https://corsproxy.io/?'+encodeURIComponent(CVD_URL),{signal:makeAbortSignal(8000),mode:'cors'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
+    ].map(function(p){return p.catch(function(){return null;});}));
+    if(cvdResults&&cvdResults.length) trades=cvdResults;
   } catch(e){}
   if(!trades||!trades.length) return;
   var buyVol=0, sellVol=0;
@@ -3637,16 +3648,12 @@ async function loadRealCVD(){
 // ═══ V12 — FONLAMA GEÇMİŞİ (Binance · son 8 periyot) ═══
 async function loadFundingHistory(){
   try {
-    var r=await fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=8',{cache:'no-store',signal:makeAbortSignal(3000)});
-    if(r.ok){
-      var j=await r.json();
-      if(j&&j.length){
-        S.fundHistory8=j.map(function(x){return parseFloat(x.fundingRate);});
-        // 8 periyot toplamı (~64 saat) — negatif birikim = long fırsatı
-        var sum=S.fundHistory8.reduce(function(a,b){return a+b;},0);
-        S.fundTrend24h=sum;
-        S.fundTrendDir=sum<-0.000040?1:sum>0.000120?-1:0;
-      }
+    var fhRes=await apiFetch('FH','https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=8',function(j){return j;});
+    if(fhRes&&fhRes.length){
+      S.fundHistory8=fhRes.map(function(x){return parseFloat(x.fundingRate);});
+      var sum=S.fundHistory8.reduce(function(a,b){return a+b;},0);
+      S.fundTrend24h=sum;
+      S.fundTrendDir=sum<-0.000040?1:sum>0.000120?-1:0;
     }
   } catch(e){}
 }
@@ -3748,12 +3755,9 @@ function check15mCandleConfirm(){
 // ═══ V12 — SPOT/FUTURES BASIS ═══
 async function loadBasis(){
   try {
-    var r=await fetch('https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT',{cache:'no-store',signal:makeAbortSignal(5000)});
-    if(r.ok){
-      var j=await r.json();
-      if(j&&j.markPrice&&j.indexPrice){
-        S.basis=(parseFloat(j.markPrice)-parseFloat(j.indexPrice))/parseFloat(j.indexPrice)*100;
-      }
+    var bj=await apiFetch('Basis','https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT',function(j){return j;});
+    if(bj&&bj.markPrice&&bj.indexPrice){
+      S.basis=(parseFloat(bj.markPrice)-parseFloat(bj.indexPrice))/parseFloat(bj.indexPrice)*100;
     }
   } catch(e){}
 }
@@ -4638,28 +4642,48 @@ async function loadPrice(){
     if(j.lastPr) return {p:parseFloat(j.lastPr),c:parseFloat(j.change24h||0)*100,h:parseFloat(j.high24h||0),l:parseFloat(j.low24h||0),v:parseFloat(j.baseVolume||0)};
     // CoinGecko format
     if(j.bitcoin) return {p:j.bitcoin.usd,c:j.bitcoin.usd_24h_change||0,h:0,l:0,v:0};
+    // OKX format
+    if(j.data&&j.data[0]&&j.data[0].last) return {p:parseFloat(j.data[0].last),c:parseFloat(j.data[0].open24h||0),h:parseFloat(j.data[0].high24h||0),l:parseFloat(j.data[0].low24h||0),v:parseFloat(j.data[0].vol24h||0)};
     return null;
   }
 
+  // ── ÖNCELİKLİ: CoinGecko direkt fetch (proxy YOK, VPN GEREKMİYOR) ──
+  try {
+    var cgUrl='https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true&_t='+Date.now();
+    var cgR=await fetch(cgUrl, {signal:makeAbortSignal(5000), mode:'cors'});
+    if(cgR&&cgR.ok){
+      var cgJ=await cgR.json();
+      var cgP=tryParse(cgJ);
+      if(cgP&&cgP.p>1000){
+        S.prev=S.price||cgP.p; S.price=cgP.p; S.chg24h=cgP.c;
+        if(cgP.h>0){S.high24h=cgP.h;S.low24h=cgP.l;}
+        TS.price=Date.now(); S.status['BN-Price']='ok';
+        try{renPrice();}catch(e){}
+        // Fiyat geldi, arka planda diğer kaynaklardan h/l/v almaya devam et
+      }
+    }
+  } catch(e){}
+
+  // ── PARALEL: Tüm kaynaklar aynı anda başlar ──
   var sources = [
-    // 1. Binance Futures (VPN ile)
+    // 1. Binance Futures (VPN ile direkt veya proxy ile)
     apiFetch('BN-Price','https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT',function(j){return j;}),
-    // 2. Binance Spot (daha az kısıtlı)
+    // 2. Binance Spot
     apiFetch('BN-Spot','https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT',function(j){return j;}),
-    // 3. Bitget (VPN ile)
+    // 3. OKX (Türkiye blok yok, public CORS)
+    apiFetch('OKX','https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT',function(j){return j;}),
+    // 4. Bitget
     apiFetch('Bitget','https://api.bitget.com/api/v2/spot/market/tickers?symbol=BTCUSDT',function(j){return j&&j.data&&j.data[0]?j.data[0]:null;}),
-    // 4. CoinGecko (VPN GEREKMİYOR — public API)
+    // 5. CoinGecko (apiFetch ile proxy fallback)
     apiFetch('CoinGecko','https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true',function(j){return j;}),
   ];
 
-  // Promise.any: ilk başarılı sonucu al (polyfill: Promise.race ile benzer)
+  // Tüm promise'leri paralel bekle — ilk geçerli sonucu al
+  var results = await Promise.all(sources.map(function(p){return p.catch(function(){return null;});}));
   var result = null;
-  for(var i=0;i<sources.length;i++){
-    try {
-      var r = await sources[i];
-      var parsed = tryParse(r);
-      if(parsed&&parsed.p>1000){ result=parsed; break; }
-    } catch(e){}
+  for(var i=0;i<results.length;i++){
+    var parsed = tryParse(results[i]);
+    if(parsed&&parsed.p>1000){ result=parsed; break; }
   }
 
   if(result){
@@ -4712,76 +4736,32 @@ async function loadBTCDominance(){
 }
 
 // ═══ NASDAQ/SPX PROXY — BTC-Hisse Korelasyonu ═══
-// Gerçek Nasdaq verisi olmadan en iyi proxy: ETH/BTC oranı + TOTAL2 market cap değişimi
-// BTC-Nasdaq korelasyonu NY seansında 0.7-0.85 → piyasa yönü kritik
 async function loadNasdaqProxy(){
-  try {
-    // ETH/BTC kısa vadeli değişimi: risk-on artarsa ETH güçlenir → Nasdaq yukarı proxy
-    var r=await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=ETHUSDT',{
-      cache:'no-store', signal:makeAbortSignal(5000)
-    });
-    if(r.ok){
-      var j=await r.json();
-      if(j&&j.priceChangePercent){
-        S.ethChange24h=parseFloat(j.priceChangePercent);
-        // BTC 24s değişimi zaten var → fark hesapla
-        if(S.chg24h!==undefined){
-          // ETH güçlü BTC'den = risk-on = Nasdaq bull proxy
-          S.ethBtcDivergence=S.ethChange24h-S.chg24h;
-        }
-      }
-    }
-  } catch(e){}
+  // ETH/USDT ve SOL/USDT apiFetch üzerinden — proxy fallback dahil
+  var ethJ=await apiFetch('ETH','https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=ETHUSDT',function(j){return j;});
+  if(ethJ&&ethJ.priceChangePercent){
+    S.ethChange24h=parseFloat(ethJ.priceChangePercent);
+    if(S.chg24h!==undefined) S.ethBtcDivergence=S.ethChange24h-S.chg24h;
+  }
+  var solJ=await apiFetch('SOL','https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=SOLUSDT',function(j){return j;});
+  if(solJ&&solJ.priceChangePercent) S.solChange24h=parseFloat(solJ.priceChangePercent);
 
-  try {
-    // TOTAL2 (BTC hariç kripto): altcoin season = risk-on = Nasdaq bull proxy
-    var r2=await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=SOLUSDT',{
-      cache:'no-store', signal:makeAbortSignal(5000)
-    });
-    if(r2.ok){
-      var j2=await r2.json();
-      if(j2&&j2.priceChangePercent){
-        S.solChange24h=parseFloat(j2.priceChangePercent);
-      }
-    }
-  } catch(e2){}
-
-  // Risk-on skoru: ETH+SOL güçlüyse piyasa risk-on → BTC long destekli
   if(S.ethChange24h!=null&&S.solChange24h!=null){
     var avgAlt=(S.ethChange24h+S.solChange24h)/2;
-    S.nasdaqProxy=avgAlt; // pozitif = risk-on (Nasdaq bull proxy)
+    S.nasdaqProxy=avgAlt;
     S.nasdaqProxyDir=avgAlt>1.5?'BULL':avgAlt<-1.5?'BEAR':'NEUTRAL';
     S.status['nasdaq-proxy']='ok';
   }
 }
 async function loadHashrate(){
   try {
-    var r=await fetch('https://api.blockchain.info/stats?cors=true',{
-      cache:'no-store', signal:makeAbortSignal(4000)
-    });
-    if(r.ok){
-      var j=await r.json();
-      if(j&&j.hash_rate){
-        var newH=parseFloat(j.hash_rate)/1e9;
-        if(S.hashrate!=null) S.hashrateChg=((newH-S.hashrate)/S.hashrate)*100;
-        S.hashrate=newH;
-      }
+    var hj=await apiFetch('Hash','https://api.blockchain.info/stats?cors=true',function(j){return j;});
+    if(hj&&hj.hash_rate){
+      var newH=parseFloat(hj.hash_rate)/1e9;
+      if(S.hashrate!=null) S.hashrateChg=((newH-S.hashrate)/S.hashrate)*100;
+      S.hashrate=newH;
     }
-  } catch(e){
-    try {
-      var r2=await fetch('https://api.codetabs.com/v1/proxy?quest='+
-        encodeURIComponent('https://api.blockchain.info/stats'),
-        {signal:makeAbortSignal(4000)});
-      if(r2.ok){
-        var j2=await r2.json();
-        if(j2&&j2.hash_rate){
-          var newH2=parseFloat(j2.hash_rate)/1e9;
-          if(S.hashrate!=null) S.hashrateChg=((newH2-S.hashrate)/S.hashrate)*100;
-          S.hashrate=newH2;
-        }
-      }
-    } catch(e2){}
-  }
+  } catch(e){}
 }
 async function loadOpenInterest(){
   // Bitget birincil
@@ -4847,6 +4827,7 @@ async function loadKlines(tf){
   var bnMap={'1m':'1m','3m':'3m','5m':'5m','15m':'15m','30m':'30m','1H':'1h','4H':'4h','6H':'6h','1D':'1d','1W':'1w'};
   var bnSpotMap={'1m':'1m','3m':'3m','5m':'5m','15m':'15m','30m':'30m','1H':'1h','4H':'4h','1D':'1d','1W':'1w'};
   var bgMap={'15m':'15min','30m':'30min','1H':'1hour','4H':'4hour','6H':'6Hutc','1D':'1day'};
+  var okxMap={'1m':'1m','3m':'3m','5m':'5m','15m':'15m','30m':'30m','1H':'1H','4H':'4H','6H':'6H','1D':'1D','1W':'1W'};
   var bnLimit=tf==='1W'?52:tf==='1m'?200:tf==='3m'?200:tf==='5m'?200:300;
   var cl=null,hi=null,lo=null,vols=null,op=null,ts=null;
 
@@ -4858,41 +4839,59 @@ async function loadKlines(tf){
     vols=bd.map(function(c){return parseFloat(c[5]);});
     op=bd.map(function(c){return parseFloat(c[1]);});
     ts=bd.map(function(c){return parseInt(c[0]);});
-    return true;
+    return cl.length>=10;
   }
 
-  // ── 1. Binance Futures ──
-  if(!cl&&bnMap[tf]){
-    try{
-      var bd=await apiFetch('BN-KL-'+tf,'https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval='+bnMap[tf]+'&limit='+bnLimit,function(j){return j;});
-      parseBnKlines(bd);
-    }catch(e){}
+  function parseOkxKlines(j){
+    if(!j||!j.data||j.data.length<10) return false;
+    // OKX: [ts, o, h, l, c, vol, ...] — ters sıralı
+    var d=[].concat(j.data).reverse();
+    cl=d.map(function(c){return parseFloat(c[4]);});
+    hi=d.map(function(c){return parseFloat(c[2]);});
+    lo=d.map(function(c){return parseFloat(c[3]);});
+    vols=d.map(function(c){return parseFloat(c[5]);});
+    op=d.map(function(c){return parseFloat(c[1]);});
+    ts=d.map(function(c){return parseInt(c[0]);});
+    return cl.length>=10;
   }
-  // ── 2. Binance Spot (VPN daha az gerekli) ──
-  if(!cl&&bnSpotMap[tf]){
-    try{
-      var bds=await apiFetch('BN-SP-'+tf,'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval='+bnSpotMap[tf]+'&limit='+bnLimit,function(j){return j;});
-      parseBnKlines(bds);
-    }catch(e){}
-  }
-  // ── 3. Bitget ──
-  if(!cl&&bgMap[tf]){
-    var gList=tf==='6H'?['6Hutc','6H']:(bgMap[tf]?[bgMap[tf]]:[]);
-    for(var gi=0;gi<gList.length;gi++){
-      try{
-        var bg2=await apiFetch('Bitget'+tf,'https://api.bitget.com/api/v2/spot/market/candles?symbol=BTCUSDT&granularity='+gList[gi]+'&limit=200',function(j){return j;});
-        if(bg2&&bg2.data&&bg2.data.length>10){
-          var d2=[].concat(bg2.data).reverse();
-          cl=d2.map(function(c){return parseFloat(c[4]);});
-          hi=d2.map(function(c){return parseFloat(c[2]);});
-          lo=d2.map(function(c){return parseFloat(c[3]);});
-          vols=d2.map(function(c){return parseFloat(c[5]);});
-          op=d2.map(function(c){return parseFloat(c[1]);});
-          ts=d2.map(function(c){return parseInt(c[0]);});
-          break;
-        }
-      }catch(e){}
-    }
+
+  // ── PARALEL: Tüm kaynaklar aynı anda çalışır — ilk başarılı kazanır ──
+  var fetches = [];
+  if(bnMap[tf]) fetches.push(
+    apiFetch('BN-KL-'+tf,'https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval='+bnMap[tf]+'&limit='+bnLimit,function(j){return j;})
+      .then(function(d){return {src:'bn',d:d};})
+  );
+  if(bnSpotMap[tf]) fetches.push(
+    apiFetch('BN-SP-'+tf,'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval='+bnSpotMap[tf]+'&limit='+bnLimit,function(j){return j;})
+      .then(function(d){return {src:'bn',d:d};})
+  );
+  if(okxMap[tf]) fetches.push(
+    apiFetch('OKX-KL-'+tf,'https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar='+okxMap[tf]+'&limit='+Math.min(bnLimit,300),function(j){return j;})
+      .then(function(d){return {src:'okx',d:d};})
+  );
+  if(bgMap[tf]) fetches.push(
+    apiFetch('Bitget'+tf,'https://api.bitget.com/api/v2/spot/market/candles?symbol=BTCUSDT&granularity='+bgMap[tf]+'&limit=200',function(j){return j;})
+      .then(function(d){return {src:'bg',d:d};})
+  );
+
+  var allResults=await Promise.all(fetches.map(function(p){return p.catch(function(){return null;});}));
+  for(var ri=0;ri<allResults.length;ri++){
+    var res=allResults[ri];
+    if(!res||!res.d) continue;
+    if(res.src==='okx'){if(parseOkxKlines(res.d)) break;}
+    else if(res.src==='bg'){
+      if(res.d&&res.d.data&&res.d.data.length>10){
+        var d2=[].concat(res.d.data).reverse();
+        cl=d2.map(function(c){return parseFloat(c[4]);});
+        hi=d2.map(function(c){return parseFloat(c[2]);});
+        lo=d2.map(function(c){return parseFloat(c[3]);});
+        vols=d2.map(function(c){return parseFloat(c[5]);});
+        op=d2.map(function(c){return parseFloat(c[1]);});
+        ts=d2.map(function(c){return parseInt(c[0]);});
+        if(cl.length>=10) break;
+        else cl=null;
+      }
+    } else {if(parseBnKlines(res.d)) break; else cl=null;}
   }
 
   if(!cl||cl.length<10) return;
@@ -4963,13 +4962,14 @@ async function loadTakerRatio(){
     }
     return false;
   }
-  // Direkt ve proxy paralel dene
+  // Direkt + 3 proxy paralel dene
   try {
-    var res=await Promise.race([
-      fetch(TAKER_URL,{cache:'no-store',signal:makeAbortSignal(4000)}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
-      fetch('https://corsproxy.io/?'+encodeURIComponent(TAKER_URL),{cache:'no-store',signal:makeAbortSignal(5000)}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
+    var takerAll=await Promise.all([
+      fetch(TAKER_URL,{signal:makeAbortSignal(5000),mode:'cors'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
+      fetch('https://api.allorigins.win/raw?url='+encodeURIComponent(TAKER_URL),{signal:makeAbortSignal(8000),mode:'cors'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
+      fetch('https://corsproxy.io/?'+encodeURIComponent(TAKER_URL),{signal:makeAbortSignal(8000),mode:'cors'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
     ]);
-    if(parseTaker(res)){ S.status['taker']='ok'; return; }
+    for(var ti=0;ti<takerAll.length;ti++){if(parseTaker(takerAll[ti])){S.status['taker']='ok';return;}}
   } catch(e){}
   S.status['taker']='err';
 }
@@ -4988,11 +4988,12 @@ async function loadCrossExchangeBasis(){
     return false;
   }
   try {
-    var res=await Promise.race([
-      fetch(BYBIT_URL,{cache:'no-store',signal:makeAbortSignal(3000)}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
-      fetch('https://corsproxy.io/?'+encodeURIComponent(BYBIT_URL),{cache:'no-store',signal:makeAbortSignal(4000)}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
+    var bybitAll=await Promise.all([
+      fetch(BYBIT_URL,{signal:makeAbortSignal(5000),mode:'cors'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
+      fetch('https://api.allorigins.win/raw?url='+encodeURIComponent(BYBIT_URL),{signal:makeAbortSignal(8000),mode:'cors'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
+      fetch('https://corsproxy.io/?'+encodeURIComponent(BYBIT_URL),{signal:makeAbortSignal(8000),mode:'cors'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
     ]);
-    if(parseBybit(res)){ S.status['bybit']='ok'; return; }
+    for(var bi=0;bi<bybitAll.length;bi++){if(parseBybit(bybitAll[bi])){S.status['bybit']='ok';return;}}
   } catch(e){}
   S.status['bybit']='err';
 }
@@ -5228,7 +5229,7 @@ async function loadNews(){ S.status['news']='off'; return; // kaldırıldı
   async function fetchRSS(feedUrl){
     try {
       var r=await fetch(RSS2JSON+encodeURIComponent(feedUrl)+'&count=10',{
-        cache:'no-store', signal:makeAbortSignal(4000)
+        signal:makeAbortSignal(5000), mode:'cors'
       });
       if(r.ok){
         var j=await r.json();
@@ -7313,30 +7314,34 @@ S._cachedScalp=sc; S._cachedScalpTs=Date.now();
 async function loadAll(){
   function safe(p){ return Promise.resolve(p).catch(function(){return null;}); }
 
+  // Faz 1: Fiyat + Fonlama (en kritik — paralel)
   prog(5,'Fiyat ve fonlama...');
-  await loadPhase(8000, [safe(loadPrice()), safe(loadFunding())]);
-  // Fiyat geldi mi? Hemen göster
+  await loadPhase(10000, [safe(loadPrice()), safe(loadFunding())]);
   try{if(S.price>0){renPrice();}}catch(e){}
 
-  prog(18,'OI + L/S...');
-  await loadPhase(8000, [safe(loadFundingHistory()), safe(loadOpenInterest()), safe(loadLongShortRatio())]);
+  // Faz 2: OI + L/S + FundingHistory (hepsi paralel)
+  prog(20,'OI + L/S + Fonlama...');
+  await loadPhase(10000, [safe(loadFundingHistory()), safe(loadOpenInterest()), safe(loadLongShortRatio())]);
 
-  prog(30,'CVD + Order Book...');
-  await loadPhase(9000, [safe(loadRealCVD()), safe(loadOrderBook()), safe(loadTakerRatio())]);
+  // Faz 3: CVD + OB + Taker (hepsi paralel)
+  prog(35,'CVD + Order Book...');
+  await loadPhase(10000, [safe(loadRealCVD()), safe(loadOrderBook()), safe(loadTakerRatio())]);
   try{ calcFundingCountdown(); calcNetFlowScore(); }catch(e){}
 
-  prog(42,'Fear & Greed...');
-  await loadPhase(8000, [safe(loadFG()), safe(loadBTCDominance()), safe(loadNasdaqProxy())]);
+  // Faz 4: Dış veriler (paralel) — hata olursa sinyal devam eder
+  prog(50,'Dış göstergeler...');
+  await loadPhase(10000, [safe(loadFG()), safe(loadBTCDominance()), safe(loadNasdaqProxy()), safe(loadBasis())]);
 
-  prog(56,'15m + 1H klines...');
-  await loadPhase(9000, [safe(loadKlines('15m')), safe(loadKlines('1H'))]);
+  // Faz 5+6: Kritik klines (paralel — 4 zaman dilimi aynı anda)
+  prog(65,'Mum verileri (15m+30m+1H+4H)...');
+  await loadPhase(12000, [
+    safe(loadKlines('15m')), safe(loadKlines('30m')),
+    safe(loadKlines('1H')), safe(loadKlines('4H'))
+  ]);
 
-  prog(70,'30m + 4H klines...');
-  await loadPhase(9000, [safe(loadKlines('30m')), safe(loadKlines('4H'))]);
-
-  prog(82,'1D + 6H klines...');
-  await loadPhase(7000, [safe(loadKlines('1D')), safe(loadKlines('6H'))]);
-
+  // Faz 7: Uzun vadeli klines (paralel)
+  prog(82,'Uzun vade (1D+6H)...');
+  await loadPhase(12000, [safe(loadKlines('1D')), safe(loadKlines('6H'))]);
   safe(loadKlines('1W'));
 
   try{
@@ -7346,7 +7351,7 @@ async function loadAll(){
     }
   }catch(e){}
 
-  prog(90,'Kalibrasyon...');
+  prog(92,'Kalibrasyon...');
   try{
     if(S.c1h&&S.h1h&&S.l1h){
       var bt=runBacktest(S.c1h,S.h1h,S.l1h,S.v1h||[],100);
@@ -7354,6 +7359,7 @@ async function loadAll(){
     }
   }catch(e){}
 
+  // Arka plan (sinyal için kritik değil)
   try{ safe(loadHashrate()); safe(loadCrossExchangeBasis()); safe(loadFutSpotRatio()); }catch(e){}
 
   prog(100,'V15 Hazır ✓');
@@ -8111,16 +8117,18 @@ function onWsPriceUpdate(){
 function init(){
   // İnterval'lar hemen başlar — veriden bağımsız
   startIntervals();
-  // WebSocket hemen bağlanır
+  // WebSocket hemen bağlanır (1s gecikme ile)
   setTimeout(function(){try{startOrderFlow();}catch(e){};},1000);
-  // Overlay 10s ve 14s'de kapanır
-  setTimeout(closeOverlay,10000);
-  setTimeout(closeOverlay,14000);
-  // loadAll arka planda
+  // Overlay güvenlik: 12s, 16s, 20s'de kapat (birinin tutması yeterli)
+  setTimeout(closeOverlay, 12000);
+  setTimeout(closeOverlay, 16000);
+  setTimeout(closeOverlay, 20000);
+  // loadAll arka planda çalışır
   loadAll()
     .then(function(){
       closeOverlay();
       try{renderAll();}catch(e){}
+      // Aktif tab'ı da yenile
       setTimeout(function(){
         try{
           var a=document.querySelector('.tc.on');
@@ -8134,10 +8142,16 @@ function init(){
         }catch(e){}
       },500);
       setTimeout(function(){try{checkPendingOutcomes();}catch(e){};},2000);
+      // Kısa periyot klines (1m/3m/5m) — yüklemeden 4s sonra
       setTimeout(function(){
-        loadPhase(8000,[safe(loadKlines('1m')),safe(loadKlines('3m')),safe(loadKlines('5m'))])
+        loadPhase(10000,[safe(loadKlines('1m')),safe(loadKlines('3m')),safe(loadKlines('5m'))])
           .then(function(){try{var b=document.getElementById('tc-btcchart');if(b&&b.classList.contains('on'))renBtcChart();}catch(e){}});
       },4000);
+      // 30s sonra bir kez daha renderAll — geç gelen veriler için
+      setTimeout(function(){
+        try{renderAll();}catch(e){}
+        try{renPrice();}catch(e){}
+      }, 30000);
     })
     .catch(function(e){
       console.warn('loadAll err:',e);
@@ -8159,7 +8173,7 @@ function startIntervals(){
   },1000);
   // Fiyat + anlık (15s) — İLK ÇALIŞMA HEMEN (sayfa açılışı)
   function doQuickUpdate(){
-    loadPhase(10000,[
+    loadPhase(12000,[
       safe(loadPrice()),safe(loadOpenInterest()),safe(loadLongShortRatio()),
       safe(loadOrderBook()),safe(loadRealCVD()),safe(loadBasis()),
       safe(loadTakerRatio()),safe(loadCrossExchangeBasis())
@@ -8177,13 +8191,10 @@ function startIntervals(){
       }catch(e){}
     }).catch(function(){});
   }
-  // İlk güncelleme 3s sonra (sayfa açılır açılmaz)
-  setTimeout(doQuickUpdate, 3000);
+  // İlk güncelleme 2s sonra (sayfa açılır açılmaz — daha hızlı)
+  setTimeout(doQuickUpdate, 2000);
   // Sonraki güncellemeler 15s'de bir
   setInterval(doQuickUpdate, 15000);
-  // PLACEHOLDER — eski setInterval kodu aşağıdaki blokla değiştirildi
-  if(false) setInterval(function(){
-  },99999999); // replaced by doQuickUpdate above
   // Klines + kalibrasyon (2dk)
   setInterval(function(){
     loadPhase(12000,[
