@@ -802,26 +802,39 @@ var PROXIES = [
 ];
 async function apiFetch(name, url, parse){
   var stamp = url+(url.includes('?')?'&':'?')+'_t='+Date.now();
-  // Direkt deneme — 4 saniye
-  try {
-    var r = await fetch(stamp, {cache:'no-store', signal:makeAbortSignal(4000)});
-    if(r.ok){
-      var j = await r.json();
-      var res = parse(j);
-      if(res!=null){ S.status[name]='ok'; return res; }
-    }
-  } catch(e){}
-  // Tek proxy (corsproxy.io) — 5 saniye
-  try {
-    var r2 = await fetch(PROXIES[0](stamp), {cache:'no-store', signal:makeAbortSignal(5000)});
-    if(r2.ok){
-      var j2 = await r2.json();
-      var res2 = parse(j2);
-      if(res2!=null){ S.status[name]='prx'; return res2; }
-    }
-  } catch(e2){}
-  S.status[name]='err';
-  return null;
+  var sig3=makeAbortSignal(3500), sig5=makeAbortSignal(5000);
+
+  // Direkt + her iki proxy PARALEL başlat — en hızlı cevabı al
+  var attempts = [
+    fetch(stamp, {cache:'no-store', signal:sig3}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
+    fetch(PROXIES[0](stamp), {cache:'no-store', signal:sig5}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}),
+    fetch(PROXIES[1](stamp), {cache:'no-store', signal:sig5}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;})
+  ];
+
+  // İlk null-olmayan sonucu döndür
+  return new Promise(function(resolve){
+    var done=false, pending=attempts.length;
+    attempts.forEach(function(p, i){
+      p.then(function(j){
+        pending--;
+        if(done) return;
+        try{
+          if(j!=null){
+            var res=parse(j);
+            if(res!=null){
+              done=true;
+              S.status[name]=i===0?'ok':'prx';
+              resolve(res);
+              return;
+            }
+          }
+        }catch(e){}
+        if(pending===0&&!done){ S.status[name]='err'; resolve(null); }
+      });
+    });
+    // 6s timeout
+    setTimeout(function(){if(!done){done=true;S.status[name]='err';resolve(null);}},6000);
+  });
 }
 
 // ═══ MATEMATİK KÜTÜPHANESİ ═══
@@ -4613,38 +4626,53 @@ function checkAlarms(){
 
 // ═══ DATA LOADERS ═══
 async function loadPrice(){
+  // WebSocket zaten fiyat veriyorsa atla
   if(S.ofConnected&&S.price>0&&(Date.now()-TS.price)<15000){S.status['BN-Price']='ok';return;}
-  var bn=await apiFetch('BN-Price','https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT',function(j){return j;});
-  if(bn&&bn.lastPrice){
-    S.prev=S.price||parseFloat(bn.lastPrice);
-    S.price=parseFloat(bn.lastPrice);
-    S.chg24h=parseFloat(bn.priceChangePercent||0);
-    S.high24h=parseFloat(bn.highPrice||0);
-    S.low24h=parseFloat(bn.lowPrice||0);
-    S.vol24h=parseFloat(bn.volume||0);
-    TS.price=Date.now(); return;
+
+  // Tüm kaynakları PARALEL dene — hangisi önce gelirse
+  function tryParse(j){
+    if(!j) return null;
+    // Binance format
+    if(j.lastPrice) return {p:parseFloat(j.lastPrice),c:parseFloat(j.priceChangePercent||0),h:parseFloat(j.highPrice||0),l:parseFloat(j.lowPrice||0),v:parseFloat(j.volume||0)};
+    // Bitget format
+    if(j.lastPr) return {p:parseFloat(j.lastPr),c:parseFloat(j.change24h||0)*100,h:parseFloat(j.high24h||0),l:parseFloat(j.low24h||0),v:parseFloat(j.baseVolume||0)};
+    // CoinGecko format
+    if(j.bitcoin) return {p:j.bitcoin.usd,c:j.bitcoin.usd_24h_change||0,h:0,l:0,v:0};
+    return null;
   }
-  // İkincil: Binance Spot
-  var bs=await apiFetch('BN-Spot','https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT',function(j){return j;});
-  if(bs&&bs.lastPrice){
-    S.prev=S.price||parseFloat(bs.lastPrice);
-    S.price=parseFloat(bs.lastPrice);
-    S.chg24h=parseFloat(bs.priceChangePercent||0);
-    S.high24h=parseFloat(bs.highPrice||0);
-    S.low24h=parseFloat(bs.lowPrice||0);
-    S.vol24h=parseFloat(bs.volume||0);
-    TS.price=Date.now(); return;
+
+  var sources = [
+    // 1. Binance Futures (VPN ile)
+    apiFetch('BN-Price','https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT',function(j){return j;}),
+    // 2. Binance Spot (daha az kısıtlı)
+    apiFetch('BN-Spot','https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT',function(j){return j;}),
+    // 3. Bitget (VPN ile)
+    apiFetch('Bitget','https://api.bitget.com/api/v2/spot/market/tickers?symbol=BTCUSDT',function(j){return j&&j.data&&j.data[0]?j.data[0]:null;}),
+    // 4. CoinGecko (VPN GEREKMİYOR — public API)
+    apiFetch('CoinGecko','https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true',function(j){return j;}),
+  ];
+
+  // Promise.any: ilk başarılı sonucu al (polyfill: Promise.race ile benzer)
+  var result = null;
+  for(var i=0;i<sources.length;i++){
+    try {
+      var r = await sources[i];
+      var parsed = tryParse(r);
+      if(parsed&&parsed.p>1000){ result=parsed; break; }
+    } catch(e){}
   }
-  // Üçüncül: Bitget
-  var bg=await apiFetch('Bitget','https://api.bitget.com/api/v2/spot/market/tickers?symbol=BTCUSDT',function(j){return j&&j.data&&j.data[0]?j.data[0]:null;});
-  if(bg&&bg.lastPr){
-    S.prev=S.price||parseFloat(bg.lastPr);
-    S.price=parseFloat(bg.lastPr);
-    S.chg24h=parseFloat(bg.change24h||0)*100;
-    S.high24h=parseFloat(bg.high24h||0);
-    S.low24h=parseFloat(bg.low24h||0);
-    S.vol24h=parseFloat(bg.baseVolume||0);
+
+  if(result){
+    S.prev=S.price||result.p;
+    S.price=result.p;
+    S.chg24h=result.c;
+    S.high24h=result.h||result.p;
+    S.low24h=result.l||result.p;
+    S.vol24h=result.v||0;
     TS.price=Date.now();
+    S.status['BN-Price']='ok';
+    // Hemen ekranda göster
+    try{renPrice();}catch(e){}
   }
 }
 async function loadFunding(){
@@ -4816,36 +4844,43 @@ async function loadFutSpotRatio(){
   } catch(e){}
 }
 async function loadKlines(tf){
-  // V16: Birincil kaynak Binance Futures (timestamp dahil, TR erişilebilir)
-  // Yedek: Bitget
   var bnMap={'1m':'1m','3m':'3m','5m':'5m','15m':'15m','30m':'30m','1H':'1h','4H':'4h','6H':'6h','1D':'1d','1W':'1w'};
+  var bnSpotMap={'1m':'1m','3m':'3m','5m':'5m','15m':'15m','30m':'30m','1H':'1h','4H':'4h','1D':'1d','1W':'1w'};
   var bgMap={'15m':'15min','30m':'30min','1H':'1hour','4H':'4hour','6H':'6Hutc','1D':'1day'};
   var bnLimit=tf==='1W'?52:tf==='1m'?200:tf==='3m'?200:tf==='5m'?200:300;
   var cl=null,hi=null,lo=null,vols=null,op=null,ts=null;
 
-  // ── Birincil: Binance Futures Klines ──
-  if(bnMap[tf]){
-    try{
-      var bnUrl='https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval='+bnMap[tf]+'&limit='+bnLimit;
-      var bd=await apiFetch('BN-KL-'+tf,bnUrl,function(j){return j;});
-      if(bd&&bd.length>10){
-        cl=bd.map(function(c){return parseFloat(c[4]);});
-        hi=bd.map(function(c){return parseFloat(c[2]);});
-        lo=bd.map(function(c){return parseFloat(c[3]);});
-        vols=bd.map(function(c){return parseFloat(c[5]);});
-        op=bd.map(function(c){return parseFloat(c[1]);});
-        ts=bd.map(function(c){return parseInt(c[0]);});
-      }
-    }catch(e){}
+  function parseBnKlines(bd){
+    if(!bd||bd.length<10) return false;
+    cl=bd.map(function(c){return parseFloat(c[4]);});
+    hi=bd.map(function(c){return parseFloat(c[2]);});
+    lo=bd.map(function(c){return parseFloat(c[3]);});
+    vols=bd.map(function(c){return parseFloat(c[5]);});
+    op=bd.map(function(c){return parseFloat(c[1]);});
+    ts=bd.map(function(c){return parseInt(c[0]);});
+    return true;
   }
 
-  // ── Yedek: Bitget (sadece 15m ve üzeri) ──
+  // ── 1. Binance Futures ──
+  if(!cl&&bnMap[tf]){
+    try{
+      var bd=await apiFetch('BN-KL-'+tf,'https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval='+bnMap[tf]+'&limit='+bnLimit,function(j){return j;});
+      parseBnKlines(bd);
+    }catch(e){}
+  }
+  // ── 2. Binance Spot (VPN daha az gerekli) ──
+  if(!cl&&bnSpotMap[tf]){
+    try{
+      var bds=await apiFetch('BN-SP-'+tf,'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval='+bnSpotMap[tf]+'&limit='+bnLimit,function(j){return j;});
+      parseBnKlines(bds);
+    }catch(e){}
+  }
+  // ── 3. Bitget ──
   if(!cl&&bgMap[tf]){
     var gList=tf==='6H'?['6Hutc','6H']:(bgMap[tf]?[bgMap[tf]]:[]);
     for(var gi=0;gi<gList.length;gi++){
       try{
-        var burl='https://api.bitget.com/api/v2/spot/market/candles?symbol=BTCUSDT&granularity='+gList[gi]+'&limit=200';
-        var bg2=await apiFetch('Bitget'+tf,burl,function(j){return j;});
+        var bg2=await apiFetch('Bitget'+tf,'https://api.bitget.com/api/v2/spot/market/candles?symbol=BTCUSDT&granularity='+gList[gi]+'&limit=200',function(j){return j;});
         if(bg2&&bg2.data&&bg2.data.length>10){
           var d2=[].concat(bg2.data).reverse();
           cl=d2.map(function(c){return parseFloat(c[4]);});
@@ -7280,6 +7315,8 @@ async function loadAll(){
 
   prog(5,'Fiyat ve fonlama...');
   await loadPhase(8000, [safe(loadPrice()), safe(loadFunding())]);
+  // Fiyat geldi mi? Hemen göster
+  try{if(S.price>0){renPrice();}}catch(e){}
 
   prog(18,'OI + L/S...');
   await loadPhase(8000, [safe(loadFundingHistory()), safe(loadOpenInterest()), safe(loadLongShortRatio())]);
@@ -8120,8 +8157,8 @@ function startIntervals(){
       if(mz&&mz.classList.contains('on'))renMerkez();
     }catch(e){}
   },1000);
-  // Fiyat + anlık (15s)
-  setInterval(function(){
+  // Fiyat + anlık (15s) — İLK ÇALIŞMA HEMEN (sayfa açılışı)
+  function doQuickUpdate(){
     loadPhase(10000,[
       safe(loadPrice()),safe(loadOpenInterest()),safe(loadLongShortRatio()),
       safe(loadOrderBook()),safe(loadRealCVD()),safe(loadBasis()),
@@ -8139,7 +8176,14 @@ function startIntervals(){
         var rb=document.getElementById('refBtn');if(rb)rb.classList.remove('spin');
       }catch(e){}
     }).catch(function(){});
-  },15000);
+  }
+  // İlk güncelleme 3s sonra (sayfa açılır açılmaz)
+  setTimeout(doQuickUpdate, 3000);
+  // Sonraki güncellemeler 15s'de bir
+  setInterval(doQuickUpdate, 15000);
+  // PLACEHOLDER — eski setInterval kodu aşağıdaki blokla değiştirildi
+  if(false) setInterval(function(){
+  },99999999); // replaced by doQuickUpdate above
   // Klines + kalibrasyon (2dk)
   setInterval(function(){
     loadPhase(12000,[
