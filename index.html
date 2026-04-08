@@ -419,24 +419,51 @@ function atrCalc(hi,lo,cl,p){
   return v;
 }
 function adxCalc(hi,lo,cl,p){
-  p=p||14;if(!hi||hi.length<p+2)return{adx:25,plus:0,minus:0};
-  var dm=[],dms=[],tr=[];
+  p=p||14;if(!hi||hi.length<p*2+1)return{adx:25,plus:0,minus:0};
+  var pdm=[],mdm=[],tr=[];
   for(var i=1;i<hi.length;i++){
     var um=hi[i]-hi[i-1],dm2=lo[i-1]-lo[i];
-    dm.push(um>dm2&&um>0?um:0);dms.push(dm2>um&&dm2>0?dm2:0);
+    pdm.push(um>dm2&&um>0?um:0);
+    mdm.push(dm2>um&&dm2>0?dm2:0);
     tr.push(Math.max(hi[i]-lo[i],Math.abs(hi[i]-cl[i-1]),Math.abs(lo[i]-cl[i-1])));
   }
-  var ts=tr.slice(-p).reduce(function(a,b){return a+b;},0);
-  var ds=dm.slice(-p).reduce(function(a,b){return a+b;},0);
-  var ms=dms.slice(-p).reduce(function(a,b){return a+b;},0);
-  if(ts===0)return{adx:0,plus:0,minus:0};
-  var diP=100*ds/ts,diM=100*ms/ts;
-  return{adx:Math.abs(diP-diM)/(diP+diM||1)*100,plus:diP,minus:diM};
+  // Wilder smoothing başlangıç
+  var atr=tr.slice(0,p).reduce(function(a,b){return a+b;},0);
+  var apd=pdm.slice(0,p).reduce(function(a,b){return a+b;},0);
+  var amd=mdm.slice(0,p).reduce(function(a,b){return a+b;},0);
+  var dxArr=[];
+  for(var i=p;i<tr.length;i++){
+    atr=atr-atr/p+tr[i];
+    apd=apd-apd/p+pdm[i];
+    amd=amd-amd/p+mdm[i];
+    var diP=atr>0?100*apd/atr:0;
+    var diM=atr>0?100*amd/atr:0;
+    var dxV=(diP+diM)>0?100*Math.abs(diP-diM)/(diP+diM):0;
+    dxArr.push({dx:dxV,plus:diP,minus:diM});
+  }
+  if(!dxArr.length)return{adx:25,plus:0,minus:0};
+  // ADX = Wilder smooth of DX
+  var adxV=dxArr.slice(0,p).reduce(function(a,b){return a+b.dx;},0)/p;
+  for(var i=p;i<dxArr.length;i++)adxV=(adxV*(p-1)+dxArr[i].dx)/p;
+  var last=dxArr[dxArr.length-1];
+  return{adx:Math.round(adxV),plus:Math.round(last.plus),minus:Math.round(last.minus)};
 }
 function vwapCalc(hi,lo,cl,vols){
+  // Günlük VWAP: UTC gece yarısından itibaren hesapla
+  // Parametre olarak gelen verinin kaç bar'ı bugüne ait bilinmiyor,
+  // bu yüzden son 96 bar'ı al (4H çözünürlükte 1 gün = 6 bar, 15m = 96 bar)
+  var n=cl.length,tv=0,tpv=0;
+  for(var i=0;i<n;i++){var tp=(hi[i]+lo[i]+cl[i])/3;var v=vols&&vols[i]?vols[i]:1;tpv+=tp*v;tv+=v;}
+  return tv>0?tpv/tv:cl[n-1];
+}
+function vwapDaily(hi,lo,cl,vols,barsPerDay){
+  // barsPerDay: 15m=96, 1H=24, 4H=6
+  barsPerDay=barsPerDay||96;
+  var dayBars=Math.min(barsPerDay,cl.length);
+  var dh=hi.slice(-dayBars),dl=lo.slice(-dayBars),dc=cl.slice(-dayBars),dv=vols?vols.slice(-dayBars):null;
   var tv=0,tpv=0;
-  for(var i=0;i<cl.length;i++){var tp=(hi[i]+lo[i]+cl[i])/3;tpv+=tp*(vols&&vols[i]?vols[i]:1);tv+=vols&&vols[i]?vols[i]:1;}
-  return tv>0?tpv/tv:cl[cl.length-1];
+  for(var i=0;i<dc.length;i++){var tp=(dh[i]+dl[i]+dc[i])/3;var v=dv&&dv[i]?dv[i]:1;tpv+=tp*v;tv+=v;}
+  return tv>0?tpv/tv:dc[dc.length-1];
 }
 function supertrend(hi,lo,cl,p,mult){
   p=p||10;mult=mult||3;var n=cl.length;
@@ -543,7 +570,7 @@ function v9Signal(cl,hi,lo,vols){
   var bb=bollinger(cl.slice(-25));
   var av=atrCalc(hi.slice(-20),lo.slice(-20),cl.slice(-20));
   var dx=adxCalc(hi.slice(-30),lo.slice(-30),cl.slice(-30));
-  var vwap=vwapCalc(hi.slice(-24),lo.slice(-24),cl.slice(-24),vs.slice(-24));
+  var vwap=vwapDaily(hi,lo,cl,vs,24);
   var vSp=vs.slice(-21,-1).reduce(function(a,b){return a+b;},0)/20;
   vSp=vs[n-1]>vSp*1.8;
   var ichu=ichimoku(hi,lo,cl);
@@ -770,7 +797,7 @@ function scalpSignal(){
     if(r15<28){bull+=1;facts.push({name:'RSI 15m '+r15.toFixed(0),dir:'LONG',w:1});}
     else if(r15>72){bear+=1;facts.push({name:'RSI 15m '+r15.toFixed(0),dir:'SHORT',w:1});}
   }
-  var vw15=vwapCalc(hi.slice(-24),lo.slice(-24),cl.slice(-24),S.v15m?S.v15m.slice(-24):null);
+  var vw15=vwapDaily(hi,lo,cl,S.v15m?S.v15m:null,96);
   var vwD=(p-vw15)/vw15*100;
   if(p>vw15&&last>prev&&vwD>0.4){bull+=2;facts.push({name:'VWAP +'+vwD.toFixed(1)+'%',dir:'LONG',w:2});}
   else if(p>vw15&&last>prev){bull+=1;facts.push({name:'VWAP üstü',dir:'LONG',w:1});}
@@ -824,8 +851,8 @@ function scalpSignal(){
 function runBT(cl,hi,lo,vols){
   if(!cl||cl.length<80)return null;
   var vs=vols||new Array(cl.length).fill(1);
-  var saved={funding:S.funding,fg:S.fg,lsRatio:S.lsRatio,oi:S.oi,oiChange:S.oiChange,ob:S.ob,obBias:S.obBias,cvdTrend:S.cvdTrend,cvdDiv:S.cvdDiv,sf:S.sf,fibLevels:S.fibLevels,lsRel:S.lsRel};
-  S.funding=null;S.fg=null;S.lsRatio=null;S.oi=null;S.oiChange=null;S.ob=null;S.obBias=0;S.cvdTrend=0;S.cvdDiv=false;S.sf=false;S.fibLevels=null;S.lsRel=1;
+  var saved={funding:S.funding,fg:S.fg,lsRatio:S.lsRatio,oi:S.oi,oiChange:S.oiChange,ob:S.ob,obBias:S.obBias,cvdTrend:S.cvdTrend,cvdDiv:S.cvdDiv,sf:S.sf,fibLevels:S.fibLevels,lsRel:S.lsRel,nasdaqDir:S.nasdaqDir,takerBuyPct:S.takerBuyPct,liqNearL:S.liqNearL,liqNearS:S.liqNearS,price:S.price};
+  S.funding=0;S.fg=null;S.lsRatio=1.0;S.oi=null;S.oiChange=0;S.ob=null;S.obBias=0;S.cvdTrend=0;S.cvdDiv=false;S.sf=false;S.fibLevels=null;S.lsRel=1;S.nasdaqDir='NEUTRAL';S.takerBuyPct=50;S.liqNearL=null;S.liqNearS=null;
   var res={long:{win:0,loss:0,total:0,totalPnl:0},short:{win:0,loss:0,total:0,totalPnl:0}};
   var trades=[],eq=[0],eqV=0,lastEnd=-1;
   try{
@@ -1138,13 +1165,13 @@ function renKarar(){
   var scS=scK&&scK.dir==='SHORT'&&(scK.st==='kg'||scK.st==='kw');
 
   var karar='BEKLE',kC='var(--Y)',kBg='rgba(251,191,36,.06)',kBd='rgba(251,191,36,.3)',kDet='';
-  if(lSc>=12&&ofGL&&scL){
+  if(lSc>=10&&ofGL&&scL){
     karar='LONG GİR';kC='var(--G)';kBg='rgba(0,217,126,.08)';kBd='rgba(0,217,126,.4)';kDet='✅ '+lSc.toFixed(1)+'/'+maxSc+' OF:ALIM Scalp:LONG';
     if(!S._lastKararDir||S._lastKararDir!=='LONG'||(Date.now()-S._lastKararTs)>300000){
       S._lastKararDir='LONG';S._lastKararTs=Date.now();
       tgSend('🟢 <b>LONG GİR</b>\n$'+Math.round(p).toLocaleString('tr-TR')+' Puan:'+lSc.toFixed(1)+'/'+maxSc+'\n'+new Date().toLocaleTimeString('tr-TR'));
     }
-  }else if(sSc>=12&&ofGS&&scS){
+  }else if(sSc>=10&&ofGS&&scS){
     karar='SHORT GİR';kC='var(--R)';kBg='rgba(255,59,92,.08)';kBd='rgba(255,59,92,.4)';kDet='✅ '+sSc.toFixed(1)+'/'+maxSc+' OF:SATIŞ Scalp:SHORT';
     if(!S._lastKararDir||S._lastKararDir!=='SHORT'||(Date.now()-S._lastKararTs)>300000){
       S._lastKararDir='SHORT';S._lastKararTs=Date.now();
@@ -1630,7 +1657,11 @@ function parsePrice(j){
   if(j.bitcoin)return{p:j.bitcoin.usd,c:j.bitcoin.usd_24h_change||0,h:0,l:0,v:0};
   if(j.result&&j.result.XXBTZUSD){var k2=j.result.XXBTZUSD;return{p:parseFloat(k2.c[0]),c:0,h:parseFloat(k2.h[1]),l:parseFloat(k2.l[1]),v:parseFloat(k2.v[1])};}
   if(j.quotes&&j.quotes.USD){var cp=j.quotes.USD;return{p:cp.price,c:cp.percent_change_24h||0,h:0,l:0,v:0};}
-  if(j.data&&j.data[0]&&j.data[0].last)return{p:parseFloat(j.data[0].last),c:0,h:parseFloat(j.data[0].high24h||0),l:parseFloat(j.data[0].low24h||0),v:0};
+  if(j.data&&j.data[0]&&j.data[0].last){
+    var od=j.data[0],pr=parseFloat(od.last),op=parseFloat(od.open24h||pr);
+    var ch=op>0?(pr-op)/op*100:0;
+    return{p:pr,c:ch,h:parseFloat(od.high24h||0),l:parseFloat(od.low24h||0),v:parseFloat(od.volCcy24h||od.vol24h||0)};
+  }
   return null;
 }
 function safe(p){return p&&typeof p.catch==='function'?p.catch(function(){return null;}):Promise.resolve(null);}
@@ -1944,6 +1975,8 @@ async function loadAll(){
   await ph(11000,[safe(loadFG()),safe(loadOI()),safe(loadLS()),safe(loadBTCDom())]);
   prog(45,'CVD + Order Book...');
   await ph(11000,[safe(loadCVD()),safe(loadOB()),safe(loadTaker()),safe(loadNasdaq())]);
+  // CVD buffer'ı hızlı doldur (ilk açılışta NÖTR kalmaması için)
+  await safe(loadCVD());await safe(loadCVD());
   calcFundCd();
   prog(60,'Mum verileri...');
   await ph(14000,[safe(loadKlines('15m')),safe(loadKlines('1H')),safe(loadKlines('4H'))]);
