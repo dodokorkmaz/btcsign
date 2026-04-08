@@ -924,10 +924,12 @@ function renPrice(){
   if(v&&S.vol24h)v.textContent=fmt(S.vol24h,0)+' BTC';
   var hb=ge('hBadge');
   if(hb){
-    var errs=Object.keys(S.status).filter(function(k){return S.status[k]==='err';}).length;
+    var criticalKeys=['price','kl1h','kl15m','kl4h'];
+    var errs=criticalKeys.filter(function(k){return S.status[k]==='err';}).length;
+    var allErrs=Object.keys(S.status).filter(function(k){return S.status[k]==='err';}).length;
     hb.style.display='';
-    if(errs>=3){hb.textContent='⛔ '+errs+' HATA';hb.style.cssText='background:rgba(255,59,92,.2);color:var(--R);border:1px solid rgba(255,59,92,.5);font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 8px;border-radius:4px';}
-    else if(errs>0){hb.textContent='⚠ '+errs+' hata';hb.style.cssText='background:rgba(251,191,36,.1);color:var(--Y);border:1px solid rgba(251,191,36,.25);font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 8px;border-radius:4px';}
+    if(errs>=2){hb.textContent='⛔ '+allErrs+' HATA';hb.style.cssText='background:rgba(255,59,92,.2);color:var(--R);border:1px solid rgba(255,59,92,.5);font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 8px;border-radius:4px';}
+    else if(allErrs>0){hb.textContent='⚠ '+allErrs+' uyarı';hb.style.cssText='background:rgba(251,191,36,.1);color:var(--Y);border:1px solid rgba(251,191,36,.25);font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 8px;border-radius:4px';}
     else{hb.textContent='✓ OK';hb.style.cssText='background:rgba(0,217,126,.08);color:var(--G);border:1px solid rgba(0,217,126,.2);font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 8px;border-radius:4px';}
   }
 }
@@ -1708,14 +1710,14 @@ async function loadKlines(tf){
   }
   if(!cl||cl.length<10)return;
   if(!cl.every(function(v){return !isNaN(v)&&v>0;}))return;
-  if(tf==='1m'){S.c1m=cl;S.h1m=hi;S.l1m=lo;S.o1m=op;}
-  if(tf==='3m'){S.c3m=cl;S.h3m=hi;S.l3m=lo;S.o3m=op;}
-  if(tf==='5m'){S.c5m=cl;S.h5m=hi;S.l5m=lo;S.o5m=op;}
+  if(tf==='1m'){S.c1m=cl;S.h1m=hi;S.l1m=lo;S.o1m=op;S.status['kl1m']='ok';}
+  if(tf==='3m'){S.c3m=cl;S.h3m=hi;S.l3m=lo;S.o3m=op;S.status['kl3m']='ok';}
+  if(tf==='5m'){S.c5m=cl;S.h5m=hi;S.l5m=lo;S.o5m=op;S.status['kl5m']='ok';}
   if(tf==='15m'){S.c15m=cl;S.h15m=hi;S.l15m=lo;S.v15m=vols;S.o15m=op;S.status['kl15m']='ok';}
-  if(tf==='30m'){S.c30m=cl;S.h30m=hi;S.l30m=lo;S.o30m=op;}
+  if(tf==='30m'){S.c30m=cl;S.h30m=hi;S.l30m=lo;S.o30m=op;S.status['kl30m']='ok';}
   if(tf==='1H'){S.c1h=cl;S.h1h=hi;S.l1h=lo;S.v1h=vols;S.o1h=op;S.fibLevels=calcFib(hi,lo,cl);S.status['kl1h']='ok';}
   if(tf==='4H'){S.c4h=cl;S.h4h=hi;S.l4h=lo;S.o4h=op;S.status['kl4h']='ok';}
-  if(tf==='1D'){S.c1d=cl;S.h1d=hi;S.l1d=lo;S.o1d=op;}
+  if(tf==='1D'){S.c1d=cl;S.h1d=hi;S.l1d=lo;S.o1d=op;S.status['kl1d']='ok';}
   S.rsi[tf]=rsiCalc(cl);
   S.macd[tf]=macdCalc(cl);
   S.ema[tf]={e20:emaVal(cl,Math.min(20,cl.length)),e50:emaVal(cl,Math.min(50,cl.length)),e200:emaVal(cl,Math.min(200,cl.length))};
@@ -1723,15 +1725,24 @@ async function loadKlines(tf){
 async function loadLiqMap(force){
   if(!S.cgKey)return;
   if(!force&&S.liqMap&&(Date.now()-S.liqMapTs)<120000)return;
-  try{
-    var r=await fetch('https://open-api-v4.coinglass.com/api/futures/liquidation/aggregated-map?symbol=BTC',{
-      headers:{'CG-API-KEY':S.cgKey,'Content-Type':'application/json'}
-    });
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    var j=await r.json();
-    if(j&&j.code==='0'&&j.data){S.liqMap=j.data;S.liqMapTs=Date.now();toast('📍 Liq Map güncellendi',2000);}
-    else toast('⚠ Liq Map: '+((j&&j.msg)||'veri yok'),3000);
-  }catch(e){toast('⚠ Liq Map yüklenemedi',3000);}
+  var url='https://open-api-v4.coinglass.com/api/futures/liquidation/aggregated-map?symbol=BTC';
+  var proxies=[
+    'https://corsproxy.io/?'+encodeURIComponent(url),
+    'https://api.allorigins.win/raw?url='+encodeURIComponent(url),
+    url
+  ];
+  for(var i=0;i<proxies.length;i++){
+    try{
+      var headers={'Content-Type':'application/json'};
+      if(i===proxies.length-1)headers['CG-API-KEY']=S.cgKey;
+      var r=await fetch(proxies[i],{headers:headers});
+      if(!r.ok)continue;
+      var j=await r.json();
+      if(j&&j.code==='0'&&j.data){S.liqMap=j.data;S.liqMapTs=Date.now();toast('📍 Liq Map güncellendi',2000);return;}
+      if(j&&j.data){S.liqMap=j.data;S.liqMapTs=Date.now();toast('📍 Liq Map güncellendi',2000);return;}
+    }catch(e){}
+  }
+  toast('⚠ Liq Map: API erişim sorunu',3000);
 }
 
 function renLiq(){
