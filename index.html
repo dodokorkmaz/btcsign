@@ -325,7 +325,7 @@ var S={
 };
 try{var _al=localStorage.getItem('btc_alarms');S.alarms=_al?JSON.parse(_al):[];}catch(e){S.alarms=[];}
 var chartPeriod=24;
-
+ 
 // ─── UTILS ───
 function fUSD(n){return '$'+Number(n).toLocaleString('tr-TR',{minimumFractionDigits:0,maximumFractionDigits:0});}
 function fPct(n){return (n>=0?'+':'')+Number(n).toFixed(2)+'%';}
@@ -341,7 +341,7 @@ function sw(id,el){
   var map={karar:renKarar,scalp:renScalp,ana:renAna,chart:renChart,conf:renConf,turev:renTurev,bt:renBT,alarm:renAlarm,liq:renLiq};
   if(map[id])setTimeout(map[id],20);
 }
-
+ 
 // ─── FETCH ───
 var PROXIES=[
   function(u){return 'https://corsproxy.io/?'+encodeURIComponent(u);},
@@ -372,7 +372,7 @@ function apiFetch(name,url,parse){
     setTimeout(function(){if(!done){done=true;S.status[name]='err';resolve(null);}},11000);
   });
 }
-
+ 
 // ─── MATH ───
 function emaVal(arr,p){
   if(!arr||arr.length<1)return 0;
@@ -488,7 +488,7 @@ function pivotPts(hi,lo,cl,p){
   p=p||24;var H=Math.max.apply(null,hi.slice(-p)),L=Math.min.apply(null,lo.slice(-p)),C=cl[cl.length-1];
   var P=(H+L+C)/3;return{R2:P+(H-L),R1:2*P-L,P:P,S1:2*P-H,S2:P-(H-L)};
 }
-
+ 
 // ─── SMC ───
 function getKZ(){
   var now=new Date(),uh=now.getUTCHours(),um=now.getUTCMinutes(),uf=uh+um/60;
@@ -530,7 +530,7 @@ function detectStr(hi,lo,cl,lb){
   else if(sb===false&&pr>lSH.p)choch={dir:'BULL',msg:'CHoCH ↑ LH kırıldı'};
   return{choch:choch,bos:bos,structBull:sb,swH:swH.slice(-3),swL:swL.slice(-3)};
 }
-
+ 
 // ─── V9 SIGNAL ───
 function v9Signal(cl,hi,lo,vols){
   if(!cl||cl.length<50)return{sig:'NEUTRAL',layer1:{score:50,dir:'NOTR',factors:[]},layer2:{score:50,dir:'NOTR',factors:[]},layer3:{score:50,dir:'NOTR',factors:[]},confidence:0,strength:'NEUTRAL',reasons:[],atrV:0,tpMult:1.8,slMult:1,lateral:false,dx:{adx:0,plus:0,minus:0},trendDir:'--'};
@@ -553,7 +553,7 @@ function v9Signal(cl,hi,lo,vols){
   var tDn=last<e200&&e20<e50&&dx.minus>dx.plus&&dx.adx>20;
   var tDir=tUp?'UP':tDn?'DOWN':'YATAY';
   var mom3=(cl[n-1]-cl[Math.max(0,n-4)])/cl[Math.max(0,n-4)];
-
+ 
   // KATMAN 1: MAKRO
   var L1=[],l1B=0,l1R=0;
   var fund=S.funding||0;
@@ -603,7 +603,7 @@ function v9Signal(cl,hi,lo,vols){
     else if(r1w>72){l1R+=2;L1.push({t:'W-RSI '+r1w.toFixed(0)+' tepe',bull:false,w:2});}
   }
   var l1T=Math.max(l1B+l1R,1),l1Sc=Math.round((l1B/l1T)*100),l1Dir=l1Sc>=60?'LONG':l1Sc<=40?'SHORT':'NOTR';
-
+ 
   // KATMAN 2: MOMENTUM
   var L2=[],l2B=0,l2R=0;
   if(tUp){l2B+=2;L2.push({t:'Trend YUKARI (EMA+ADX)',bull:true});}
@@ -625,7 +625,7 @@ function v9Signal(cl,hi,lo,vols){
   if(S.obBias>0.5){l2B+=1;L2.push({t:'OB bid ağırlıklı',bull:true});}
   else if(S.obBias<-0.5){l2R+=1;L2.push({t:'OB ask ağırlıklı',bull:false});}
   var l2T=Math.max(l2B+l2R,1),l2Sc=Math.round((l2B/l2T)*100),l2Dir=l2Sc>=58?'LONG':l2Sc<=42?'SHORT':'NOTR';
-
+ 
   // KATMAN 3: TETİKLEYİCİ
   var L3=[],l3B=0,l3R=0;
   if(rv!==null){
@@ -671,7 +671,7 @@ function v9Signal(cl,hi,lo,vols){
     if(fvg15.nearBear){var fpb=kz.active?3:2.5;l3R+=fpb;L3.push({t:'FVG Bear 15m'+(kz.active?' [KZ]':''),bull:false});}
   }
   var l3T=Math.max(l3B+l3R,1),l3Sc=Math.round((l3B/l3T)*100),l3Dir=l3Sc>=60?'LONG':l3Sc<=40?'SHORT':'NOTR';
-
+ 
   // KARAR
   var lV=0,sV=0;
   if(l1Dir==='LONG')lV+=3;else if(l1Dir==='SHORT')sV+=3;
@@ -712,7 +712,7 @@ function v9Signal(cl,hi,lo,vols){
     stV:stV,ichu:ichu,vwapV:vwap,mvCalc:mv,ema200:e200,ema50:e50,ema20:e20,ema9:e9,
     tpMult:tpM,slMult:slM,reasons:reasons,kz:kz,fvg:fvg,str:str};
 }
-
+ 
 // ─── SCALP SIGNAL ───
 function ofScore(){
   var tot=S.ofBuyVol+S.ofSellVol;
@@ -734,7 +734,7 @@ function scalpSignal(){
   if(bw<1.5)chopR.push('BB BW '+bw.toFixed(1)+'%');
   if(chopR.length>=2)return{sig:'BEKLE',isChop:true,chopR:chopR,bull:0,bear:0,activeScore:0,confidence:20,factors:[],atr:av15,tp:null,sl:null,rr:null,tpMult:1,slMult:1};
   var facts=[],bull=0,bear=0,minTh=chopR.length===1?7:5;
-
+ 
   if(S.cvdHist.length>=6){
     var ch=S.cvdHist,cL=ch[ch.length-1].v,cF=ch[0].v,cd=cL-cF,cN=Math.abs(cd)/(p*0.001||100);
     var wCvd=cN>2?3:cN>1?2:1;
@@ -798,7 +798,7 @@ function scalpSignal(){
     if(S.funding<-0.000001){bull+=2;facts.push({name:'Fonlama '+fMins+'dk neg.',dir:'LONG',w:2});}
     else if(S.funding>0.00001){bear+=2;facts.push({name:'Fonlama '+fMins+'dk poz.',dir:'SHORT',w:2});}
   }
-
+ 
   var score=Math.max(bull,bear);
   var sig='BEKLE';
   if(bull>=minTh&&bull>bear*1.2)sig='LONG';
@@ -818,7 +818,7 @@ function scalpSignal(){
   var conf=Math.round(Math.min(95,Math.max(20,sig==='BEKLE'?20+score*3:score>=10?90:score>=8?80:score>=6?65:55)));
   return{sig:sig,isChop:false,chopR:chopR,bull:bull,bear:bear,activeScore:score,confidence:conf,factors:facts,atr:av15,tp:tp,sl:sl,rr:rr,tpMult:tpM,slMult:slM,kz:kz,minTh:minTh};
 }
-
+ 
 // ─── BACKTEST ───
 function runBT(cl,hi,lo,vols){
   if(!cl||cl.length<80)return null;
@@ -864,7 +864,7 @@ function runBT(cl,hi,lo,vols){
   res.profitFactor=gL>0?parseFloat((gW/gL).toFixed(2)):gW>0?99:0;
   return res;
 }
-
+ 
 // ─── CONFLUENCE SCORE ───
 function confScore(){
   var layers=[];
@@ -904,7 +904,7 @@ function confScore(){
   layers.forEach(function(l){ws+=l.sc*l.w;tw+=l.w;});
   return{score:tw>0?Math.round(ws/tw):50,layers:layers};
 }
-
+ 
 // ─── RENDER ───
 function renPrice(){
   var p=S.price,e=ge('pMain');
@@ -933,7 +933,7 @@ function renPrice(){
     else{hb.textContent='✓ OK';hb.style.cssText='background:rgba(0,217,126,.08);color:var(--G);border:1px solid rgba(0,217,126,.2);font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 8px;border-radius:4px';}
   }
 }
-
+ 
 function lyrCard(num,name,layer,desc){
   var lc=layer.dir==='LONG'?'ly-long':layer.dir==='SHORT'?'ly-short':'ly-wait';
   var lC=layer.dir==='LONG'?'var(--G)':layer.dir==='SHORT'?'var(--R)':'var(--Y)';
@@ -946,7 +946,7 @@ function lyrCard(num,name,layer,desc){
     +'<div style="font-size:8px;color:var(--dim);margin-top:2px">'+desc+'</div>'
     +'</div>';
 }
-
+ 
 function renAna(){
   var pp=ge('anaPanel');if(!pp)return;
   var cl=S.c1h,hi=S.h1h,lo=S.l1h,vols=S.v1h;
@@ -1006,7 +1006,7 @@ function renAna(){
   +'</div>';
   setTimeout(function(){drawChart('chartC',chartPeriod);},50);
 }
-
+ 
 function renKarar(){
   var pp=ge('kararPanel');if(!pp)return;
   var p=S.price||0;
@@ -1025,7 +1025,7 @@ function renKarar(){
   var seansOk=seans==='Londra'||seans==='NY'||seans==='Londra+NY';
   var W={OF:3,Trend:3,Likidasyon:2,Scalp:2,Fonlama:2,'L/S':2,OB:1,ATR:1,CVD:2};
   var krits=[];
-
+ 
   // 1 Fonlama
   var fv='--',fst='',fdir=null,fdet='';
   if(S.funding!==null){
@@ -1038,7 +1038,7 @@ function renKarar(){
     else fdet='Normal·'+S.fundCd+' kaldı';
   }
   krits.push({name:'Fonlama',val:fv,st:fst,dir:fdir,det:fdet,ico:'💰',w:2});
-
+ 
   // 2 L/S
   var lsv='--',lsst='',lsdir=null,lsdet='';
   if(S.lsRatio!==null){
@@ -1050,7 +1050,7 @@ function renKarar(){
     else lsdet='Dengeli';
   }
   krits.push({name:'L/S',val:lsv,st:lsst,dir:lsdir,det:lsdet,ico:'⚖️',w:2});
-
+ 
   // 3 Order Flow
   var ofs=ofScore(),ofv='--',ofst='',ofdir=null,ofdet='';
   if(S.ofConn){
@@ -1063,7 +1063,7 @@ function renKarar(){
     if(S.ofWhalePts&&(Date.now()-S.ofWhalePts)<120000&&S.ofWhaleAlert){ofdet+=' · 🐳 $'+Math.round(S.ofWhaleAlert.usd/1000)+'K '+S.ofWhaleAlert.side;}
   }else{ofv='Bağlanıyor...';ofdet='WS bekleniyor';}
   krits.push({name:'OF',val:ofv,st:ofst,dir:ofdir,det:ofdet,ico:'📊',w:3});
-
+ 
   // 4 Trend
   var tv='--',tst='',tdir=null,tdet='';
   if(ana&&p){
@@ -1074,7 +1074,7 @@ function renKarar(){
     else{tst='kw';tdir='SHORT';tdet='EMA200 altında';}
   }
   krits.push({name:'Trend',val:tv,st:tst,dir:tdir,det:tdet,ico:'📈',w:3});
-
+ 
   // 5 ATR/Seans
   var atv='--',atst='',atdet='';
   if(av>0){
@@ -1085,7 +1085,7 @@ function renKarar(){
     else{atst='';atdet='ATR düşük·'+seans;}
   }
   krits.push({name:'ATR',val:atv,st:atst,dir:null,det:atdet,ico:'🕒',w:1});
-
+ 
   // 6 Scalp
   var sv='--',sst='',sdir=null,sdet='';
   if(sc){
@@ -1094,14 +1094,14 @@ function renKarar(){
     else{sv='BEKLE';sdet='L:'+sc.bull+' S:'+sc.bear+' Min '+sc.minTh;}
   }
   krits.push({name:'Scalp',val:sv,st:sst,dir:sdir,det:sdet,ico:'⚡',w:2});
-
+ 
   // 7 Likidasyon
   var lqv='--',lqst='',lqdir=null,lqdet='';
   if(S.liqNearL&&p){var dL=Math.abs(S.liqNearL.price-p)/p*100;lqv='$'+Math.round(S.liqNearL.price).toLocaleString('tr-TR');lqst=dL<1.5?'kg':'kw';lqdir='LONG';lqdet='Long liki ~%'+dL.toFixed(1)+' (tahmini)';}
   else if(S.liqNearS&&p){var dS=Math.abs(S.liqNearS.price-p)/p*100;lqv='$'+Math.round(S.liqNearS.price).toLocaleString('tr-TR');lqst=dS<1.5?'kw':'';lqdir='SHORT';lqdet='Short liki ~%'+dS.toFixed(1)+' (tahmini)';}
   else{lqv='Uzak';lqdet='Yakın liki yok';}
   krits.push({name:'Likidasyon',val:lqv,st:lqst,dir:lqdir,det:lqdet,ico:'🗺',w:2});
-
+ 
   // 8 OB
   var obv='--',obst='',obdir=null,obdet='';
   if(S.ob&&p){
@@ -1112,7 +1112,7 @@ function renKarar(){
     else obv='Dengeli';
   }
   krits.push({name:'OB',val:obv,st:obst,dir:obdir,det:obdet,ico:'🧱',w:1});
-
+ 
   // 9 CVD
   var cvv='--',cvst='',cvdir=null,cvdet='';
   if(S.cvdHist.length>=8){
@@ -1122,7 +1122,7 @@ function renKarar(){
     else cvdet='Birikme bekle';
   }else{cvv='Yükleniyor';cvdet='Buffer dolmadı';}
   krits.push({name:'CVD',val:cvv,st:cvst,dir:cvdir,det:cvdet,ico:'💧',w:2});
-
+ 
   // SKOR
   var lSc=0,sSc=0,maxSc=0;
   krits.forEach(function(k){
@@ -1135,7 +1135,7 @@ function renKarar(){
   var ofGS=ofK&&ofK.dir==='SHORT'&&(ofK.st==='kgs'||ofK.st==='kg');
   var scL=scK&&scK.dir==='LONG'&&(scK.st==='kg'||scK.st==='kw');
   var scS=scK&&scK.dir==='SHORT'&&(scK.st==='kg'||scK.st==='kw');
-
+ 
   var karar='BEKLE',kC='var(--Y)',kBg='rgba(251,191,36,.06)',kBd='rgba(251,191,36,.3)',kDet='';
   if(lSc>=12&&ofGL&&scL){
     karar='LONG GİR';kC='var(--G)';kBg='rgba(0,217,126,.08)';kBd='rgba(0,217,126,.4)';kDet='✅ '+lSc.toFixed(1)+'/'+maxSc+' OF:ALIM Scalp:LONG';
@@ -1152,12 +1152,12 @@ function renKarar(){
   }else if(lSc>=9&&(ofGL||scL)){karar='LONG DÜŞÜNEBİLİRSİN';kC='var(--G)';kBg='rgba(0,217,126,.04)';kBd='rgba(0,217,126,.2)';kDet='⚠ '+lSc.toFixed(1)+'/'+maxSc+' Teyit bekle';}
   else if(sSc>=9&&(ofGS||scS)){karar='SHORT DÜŞÜNEBİLİRSİN';kC='var(--R)';kBg='rgba(255,59,92,.04)';kBd='rgba(255,59,92,.2)';kDet='⚠ '+sSc.toFixed(1)+'/'+maxSc+' Teyit bekle';}
   else{kDet='L:'+lSc.toFixed(1)+' S:'+sSc.toFixed(1)+'/'+maxSc;}
-
+ 
   var kTp=null,kSl=null,kRr=null;
   if(sc&&sc.sig!=='BEKLE'&&sc.tp&&!sc.isChop){kTp=sc.tp;kSl=sc.sl;}
   else if(av&&(karar.includes('LONG')||karar.includes('SHORT'))){var kd=karar.includes('LONG')?'LONG':'SHORT';kTp=kd==='LONG'?p+av*1.8:p-av*1.8;kSl=kd==='LONG'?p-av:p+av;}
   if(kTp&&kSl)kRr=parseFloat((Math.abs(kTp-p)/Math.abs(kSl-p)).toFixed(1));
-
+ 
   var html='';
   html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--t2);letter-spacing:2px;margin-bottom:10px">🎯 KARAR MERKEZİ · '+new Date().toLocaleTimeString('tr-TR')+(kz.active?' · '+kz.name:'')+' · '+seans+'</div>';
   html+='<div style="background:'+kBg+';border:2px solid '+kBd+';border-radius:14px;padding:18px;margin-bottom:12px;text-align:center">';
@@ -1191,7 +1191,7 @@ function renKarar(){
       +'</div>';
   });
   html+='</div>';
-
+ 
   // Çoklu TF
   html+='<div class="sh" style="margin-top:14px">Çoklu TF Özeti</div>';
   html+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
@@ -1209,7 +1209,7 @@ function renKarar(){
   html+='</div>';
   pp.innerHTML=html;
 }
-
+ 
 function renScalp(){
   var pp=ge('scalpPanel');if(!pp)return;
   var p=S.price||0;
@@ -1249,7 +1249,7 @@ function renScalp(){
   html+='<div style="font-size:9px;color:var(--t2);margin-top:8px;padding:7px 10px;background:rgba(61,158,255,.04);border:1px solid rgba(61,158,255,.1);border-radius:7px">Min '+res.minTh+'p · ATR:$'+Math.round(res.atr||0)+'</div>';
   pp.innerHTML=html;
 }
-
+ 
 function renConf(){
   var cf=confScore();
   var c=cf.score>=65?'var(--G)':cf.score<=35?'var(--R)':'var(--Y)';
@@ -1263,7 +1263,7 @@ function renConf(){
     return '<div class="cfi"><div class="cfi-name">'+l.name+'<br><span style="font-size:8px;color:var(--t2)">'+(l.note||'')+'</span></div><div class="cfi-trk"><div class="cfi-fill" style="width:'+l.sc+'%;background:'+lc+'"></div></div><div class="cfi-dir" style="color:'+lc+'">'+l.dir+'</div></div>';
   }).join('');
 }
-
+ 
 function renTurev(){
   var tg=ge('turevGrid');
   if(tg){
@@ -1291,7 +1291,7 @@ function renTurev(){
     }).join('')+'</div>';
   }
 }
-
+ 
 function renBT(){
   var bt=S.btRes['1H'];if(!bt)return;
   var bts=ge('btSummary');
@@ -1335,7 +1335,7 @@ function renBT(){
     tbl.innerHTML=rows;
   }
 }
-
+ 
 function runFullBT(){
   var btn=ge('btnBT');if(btn){btn.textContent='⏳ Çalışıyor...';btn.disabled=true;}
   var bts=ge('btSummary');if(bts)bts.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:20px;color:var(--t2);font-size:11px">Hesaplanıyor...'+(S.c1h?' ('+S.c1h.length+' mum)':'')+'</div>';
@@ -1345,14 +1345,14 @@ function runFullBT(){
   },50);
 }
 function resetBT(){S.btRes={};var bts=ge('btSummary');if(bts)bts.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:20px;color:var(--t2);font-size:11px">Backtest Çalıştır butonuna bas.</div>';var beq=ge('btEquity');if(beq)beq.innerHTML='';var tbl=ge('btTbl');if(tbl)tbl.innerHTML='';}
-
+ 
 function renAlarm(){
   var ll=ge('alList');if(!ll)return;
   if(!S.alarms.length){ll.innerHTML='<div style="font-size:10px;color:var(--t2);text-align:center;padding:14px">Alarm yok</div>';return;}
   ll.innerHTML=S.alarms.map(function(a){return '<div class="al-item"><span style="color:'+(a.type==='above'?'var(--G)':'var(--R)')+'">'+(a.type==='above'?'▲':'▼')+' '+fUSD(a.price)+'</span><button onclick="delAlarm('+a.id+')" style="background:none;border:none;color:var(--R);cursor:pointer;font-size:16px">&times;</button></div>';}).join('');
   var sf=ge('sfSt');if(sf){var kz=getKZ();sf.textContent='Şu an: '+kz.name+' · '+new Date().toLocaleTimeString('tr-TR')+(kz.active?' (Aktif KZ)':'');}
 }
-
+ 
 function setCandleTF(tf,el){
   S.candleTF=tf;
   document.querySelectorAll('#candleTabs .ctab').forEach(function(t){t.classList.remove('on');});
@@ -1362,7 +1362,7 @@ function setCandleTF(tf,el){
     safe(loadKlines(tf)).then(function(){drawCandleChart();});
   }
 }
-
+ 
 function drawCandleChart(){
   var canvas=ge('candleChart');if(!canvas)return;
   var tf=S.candleTF||'15m';
@@ -1446,7 +1446,7 @@ function drawCandleChart(){
   }
   var prEl=ge('candlePrice');if(prEl)prEl.textContent=tf+' · '+n+' mum';
 }
-
+ 
 function renChart(){
   drawCandleChart();
   // SMC analizi aşağıya
@@ -1488,7 +1488,7 @@ function renChart(){
   html+='</div>';
   pp.innerHTML=html;
 }
-
+ 
 // ─── CHART ───
 function drawChart(id,hours){
   var canvas=ge(id);if(!canvas)return;
@@ -1517,7 +1517,7 @@ function drawChart(id,hours){
   ctx.fillText(fUSD(mx),4,13);ctx.fillText(fUSD(mn),4,H-4);
 }
 function chP(p,el){chartPeriod=p;document.querySelectorAll('.ctab').forEach(function(t){t.classList.remove('on');});el.classList.add('on');drawChart('chartC',p);}
-
+ 
 // ─── ALARMLAR ───
 function addAlarm(){
   var pEl=ge('alP'),tEl=ge('alT');
@@ -1547,7 +1547,7 @@ function toggleSF(){
   if(d)d.style.right=S.sf?'2px':'22px';
   toast('Seans filtresi: '+(S.sf?'Açık':'Kapalı'));
 }
-
+ 
 // ─── TELEGRAM ───
 function _ck(n,v){try{var e=new Date();e.setTime(e.getTime()+90*864e5);document.cookie=n+'='+encodeURIComponent(v)+';expires='+e.toUTCString()+';path=/;SameSite=Lax';}catch(e){}}
 function _getCk(n){try{var k=n+'=',ca=document.cookie.split(';');for(var i=0;i<ca.length;i++){var c=ca[i].trim();if(c.indexOf(k)===0)return decodeURIComponent(c.substring(k.length));}}catch(e){}return '';}
@@ -1590,7 +1590,7 @@ function tgBake(){
     tgSt('⬇ İndiriliyor...','rgba(247,147,26,.1)','var(--O)');toast('Dosya indiriliyor');
   }catch(err){tgSt('⚠ '+err.message,'rgba(255,59,92,.1)','var(--R)');}
 }
-
+ 
 // ─── VERİ YÜKLEYİCİLER ───
 function parsePrice(j){
   if(!j)return null;
@@ -1603,7 +1603,7 @@ function parsePrice(j){
 }
 function safe(p){return p&&typeof p.catch==='function'?p.catch(function(){return null;}):Promise.resolve(null);}
 function ph(ms,arr){return Promise.race([Promise.all(arr),new Promise(function(r){setTimeout(r,ms);})]);}
-
+ 
 async function loadPrice(){
   if(S.ofConn&&S.price>0)return;
   var urls=['https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true',
@@ -1692,20 +1692,23 @@ async function loadLiqs(){
 async function loadKlines(tf){
   var bnMap={'1m':'1m','3m':'3m','5m':'5m','15m':'15m','30m':'30m','1H':'1h','4H':'4h','1D':'1d','1W':'1w'};
   var okxMap={'1m':'1m','3m':'3m','5m':'5m','15m':'15m','30m':'30m','1H':'1H','4H':'4H','1D':'1D','1W':'1W'};
+  var bybitMap={'1m':'1','3m':'3','5m':'5','15m':'15','30m':'30','1H':'60','4H':'240','1D':'D','1W':'W'};
   var lim=tf==='1W'?52:(tf==='1m'||tf==='3m')?200:300;
   var cl=null,hi=null,lo=null,op=null,vols=null;
   function parseBN(bd){if(!bd||bd.length<10)return false;op=bd.map(function(c){return parseFloat(c[1]);});hi=bd.map(function(c){return parseFloat(c[2]);});lo=bd.map(function(c){return parseFloat(c[3]);});cl=bd.map(function(c){return parseFloat(c[4]);});vols=bd.map(function(c){return parseFloat(c[5]);});return cl.length>=10;}
   function parseOKX(j){if(!j||!j.data||j.data.length<10)return false;var d=[].concat(j.data).reverse();op=d.map(function(c){return parseFloat(c[1]);});hi=d.map(function(c){return parseFloat(c[2]);});lo=d.map(function(c){return parseFloat(c[3]);});cl=d.map(function(c){return parseFloat(c[4]);});vols=d.map(function(c){return parseFloat(c[5]);});return cl.length>=10;}
+  function parseBybit(j){if(!j||!j.result||!j.result.list||j.result.list.length<10)return false;var d=[].concat(j.result.list).reverse();op=d.map(function(c){return parseFloat(c[1]);});hi=d.map(function(c){return parseFloat(c[2]);});lo=d.map(function(c){return parseFloat(c[3]);});cl=d.map(function(c){return parseFloat(c[4]);});vols=d.map(function(c){return parseFloat(c[5]);});return cl.length>=10;}
   var fetches=[];
   if(bnMap[tf]){
     fetches.push(apiFetch('kl'+tf,'https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval='+bnMap[tf]+'&limit='+lim,function(j){return j;}).then(function(d){return{src:'bn',d:d};}));
     fetches.push(apiFetch('kl'+tf,'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval='+bnMap[tf]+'&limit='+lim,function(j){return j;}).then(function(d){return{src:'bn',d:d};}));
   }
   if(okxMap[tf])fetches.push(apiFetch('kl'+tf,'https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar='+okxMap[tf]+'&limit='+Math.min(lim,300),function(j){return j;}).then(function(d){return{src:'okx',d:d};}));
+  if(bybitMap[tf])fetches.push(apiFetch('kl'+tf,'https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval='+bybitMap[tf]+'&limit='+Math.min(lim,200),function(j){return j;}).then(function(d){return{src:'bybit',d:d};}));
   var all=await Promise.all(fetches.map(function(p){return p.catch(function(){return null;});}));
   for(var i=0;i<all.length;i++){
     var res=all[i];if(!res||!res.d)continue;
-    var ok=res.src==='okx'?parseOKX(res.d):parseBN(res.d);
+    var ok=res.src==='okx'?parseOKX(res.d):res.src==='bybit'?parseBybit(res.d):parseBN(res.d);
     if(ok){break;}else cl=null;
   }
   if(!cl||cl.length<10)return;
@@ -1744,7 +1747,7 @@ async function loadLiqMap(force){
   }
   toast('⚠ Liq Map: API erişim sorunu',3000);
 }
-
+ 
 function renLiq(){
   if(!S.liqMap){
     loadLiqMap();
@@ -1769,7 +1772,7 @@ function renLiq(){
   html+='<div style="font-size:8px;color:var(--dim);margin-top:8px">Son güncelleme: '+new Date(S.liqMapTs).toLocaleTimeString('tr-TR')+'</div>';
   pp.innerHTML=html;
 }
-
+ 
 function drawLiqMap(){
   var canvas=ge('liqCanvas');if(!canvas)return;
   var d=S.liqMap,p=S.price||0;if(!d||!p)return;
@@ -1820,15 +1823,15 @@ function drawLiqMap(){
   ctx.fillStyle='#000';ctx.font='bold 9px monospace';ctx.textAlign='center';
   ctx.fillText('◉ '+fUSD(p),(padL+(W-padR))/2,py+3);
 }
-
-
+ 
+ 
 function calcFundCd(){
   var now=Date.now(),d=new Date(now),uh=d.getUTCHours(),um=d.getUTCMinutes(),us=d.getUTCSeconds();
   var tot=uh*3600+um*60+us,per=8*3600,el=tot%per,next=(per-el)*1000;
   S.fundNextTs=now+next;var ts=Math.floor(next/1000),h=Math.floor(ts/3600),m=Math.floor((ts%3600)/60),s=ts%60;
   S.fundCd=(h>0?h+'sa ':'')+m+'dk '+s+'s';
 }
-
+ 
 // ─── WEBSOCKET ORDER FLOW ───
 function startOF(){
   if(S.ofWs&&S.ofWs.readyState===1)return;
@@ -1876,7 +1879,7 @@ function startOF(){
     ws.onclose=function(){S.ofConn=false;S.status['ws']='err';toast('🔌 WS koptu, 12sn sonra yeniden bağlanıyor...',3000);setTimeout(startOF,12000);};
   }catch(e){S.ofConn=false;S.status['ws']='err';}
 }
-
+ 
 // ─── ANA DÖNGÜ ───
 function renderAll(){
   try{renPrice();}catch(e){}
@@ -1887,7 +1890,7 @@ function renderAll(){
   try{if(map[id])map[id]();}catch(e){}
   if(id==='ana')try{drawChart('chartC',chartPeriod);}catch(e){}
 }
-
+ 
 async function loadAll(){
   prog(5,'Fiyat alınıyor...');
   await ph(11000,[safe(loadPrice()),safe(loadFunding())]);
@@ -1905,7 +1908,7 @@ async function loadAll(){
   try{if(S.c1h&&S.h1h&&S.l1h)await loadLiqs();}catch(e){}
   prog(100,'V16 Hazır ✓');
 }
-
+ 
 function startIntervals(){
   setInterval(function(){try{var e=ge('clock');if(e)e.textContent=new Date().toLocaleTimeString('tr-TR');calcFundCd();}catch(e){}},1000);
   function quickUp(){
@@ -1920,7 +1923,7 @@ function startIntervals(){
   setInterval(function(){ph(15000,[safe(loadFG()),safe(loadBTCDom()),safe(loadNasdaq()),safe(loadKlines('4H')),safe(loadKlines('1D'))]).then(function(){renderAll();});},600000);
   setInterval(function(){safe(loadKlines('5m'));},30000);
 }
-
+ 
 function init(){
   tgInit();
   setTimeout(function(){
@@ -1937,13 +1940,13 @@ function init(){
   setTimeout(closeOv,12000);setTimeout(closeOv,20000);
   loadAll().then(function(){closeOv();renderAll();toast('V16 Hazır',2000);}).catch(function(){closeOv();renderAll();});
 }
-
+ 
 function quickRef(){
   var btn=ge('refBtn');if(btn)btn.classList.add('spinning');
   S.btRes={};S._smcCache=null;S._anaCache=null;S._anaCacheTs=0;S._tfCache={};
   loadAll().then(function(){renderAll();var b=ge('refBtn');if(b)b.classList.remove('spinning');toast('Güncellendi');}).catch(function(){var b=ge('refBtn');if(b)b.classList.remove('spinning');});
 }
-
+ 
 if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}
 window.addEventListener('resize',function(){try{drawChart('chartC',chartPeriod);}catch(e){}try{drawCandleChart();}catch(e){}});
 </script>
