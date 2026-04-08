@@ -247,6 +247,7 @@ input,select{font-size:16px!important}
     </div>
     <div id="liqInfo" class="card"></div>
   </div>
+  <div class="tc" id="tc-bt">
     <div style="display:flex;gap:8px;margin-bottom:12px">
       <button id="btnBT" onclick="runFullBT()" style="background:rgba(247,147,26,.12);border:1px solid rgba(247,147,26,.35);border-radius:7px;color:var(--O);padding:8px 16px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;cursor:pointer">▶ Backtest Çalıştır</button>
       <button onclick="resetBT()" style="background:rgba(255,59,92,.08);border:1px solid rgba(255,59,92,.25);border-radius:7px;color:var(--R);padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer">↺ Sıfırla</button>
@@ -457,9 +458,13 @@ function vwapCalc(hi,lo,cl,vols){
   return tv>0?tpv/tv:cl[n-1];
 }
 function vwapDaily(hi,lo,cl,vols,barsPerDay){
-  // barsPerDay: 15m=96, 1H=24, 4H=6
+  // UTC gece yarısından itibaren geçen bar sayısını hesapla
   barsPerDay=barsPerDay||96;
-  var dayBars=Math.min(barsPerDay,cl.length);
+  var now=new Date();
+  var secsSinceMidnight=now.getUTCHours()*3600+now.getUTCMinutes()*60+now.getUTCSeconds();
+  var minsPerBar=barsPerDay===96?15:barsPerDay===24?60:barsPerDay===6?240:15;
+  var barsSinceMidnight=Math.max(1,Math.floor(secsSinceMidnight/(minsPerBar*60))+1);
+  var dayBars=Math.min(barsSinceMidnight,cl.length);
   var dh=hi.slice(-dayBars),dl=lo.slice(-dayBars),dc=cl.slice(-dayBars),dv=vols?vols.slice(-dayBars):null;
   var tv=0,tpv=0;
   for(var i=0;i<dc.length;i++){var tp=(dh[i]+dl[i]+dc[i])/3;var v=dv&&dv[i]?dv[i]:1;tpv+=tp*v;tv+=v;}
@@ -852,7 +857,11 @@ function runBT(cl,hi,lo,vols){
   if(!cl||cl.length<80)return null;
   var vs=vols||new Array(cl.length).fill(1);
   var saved={funding:S.funding,fg:S.fg,lsRatio:S.lsRatio,oi:S.oi,oiChange:S.oiChange,ob:S.ob,obBias:S.obBias,cvdTrend:S.cvdTrend,cvdDiv:S.cvdDiv,sf:S.sf,fibLevels:S.fibLevels,lsRel:S.lsRel,nasdaqDir:S.nasdaqDir,takerBuyPct:S.takerBuyPct,liqNearL:S.liqNearL,liqNearS:S.liqNearS,price:S.price};
-  S.funding=0;S.fg=null;S.lsRatio=1.0;S.oi=null;S.oiChange=0;S.ob=null;S.obBias=0;S.cvdTrend=0;S.cvdDiv=false;S.sf=false;S.fibLevels=null;S.lsRel=1;S.nasdaqDir='NEUTRAL';S.takerBuyPct=50;S.liqNearL=null;S.liqNearS=null;
+  // Backtest: makro verileri nötr değerlere sıfırla (geçmiş bar için bugünkü veri geçersiz)
+  S.funding=0;S.fg=null;S.lsRatio=1.0;S.oi=null;S.oiChange=0;
+  S.ob=null;S.obBias=0;S.cvdTrend=0;S.cvdDiv=false;S.sf=false;
+  S.fibLevels=null;S.lsRel=1;S.nasdaqDir='NEUTRAL';S.takerBuyPct=50;
+  S.liqNearL=null;S.liqNearS=null;
   var res={long:{win:0,loss:0,total:0,totalPnl:0},short:{win:0,loss:0,total:0,totalPnl:0}};
   var trades=[],eq=[0],eqV=0,lastEnd=-1;
   try{
@@ -1159,27 +1168,41 @@ function renKarar(){
     else if(k.dir==='SHORT'){if(k.st==='kgs'||k.st==='kg')sSc+=w;else if(k.st==='kw')sSc+=w*.5;}
   });
   var ofK=krits.find(function(k){return k.name==='OF';}),scK=krits.find(function(k){return k.name==='Scalp';});
+  var trendK=krits.find(function(k){return k.name==='Trend';});
+  var cvdK=krits.find(function(k){return k.name==='CVD';});
+  var fundK=krits.find(function(k){return k.name==='Fonlama';});
   var ofGL=ofK&&ofK.dir==='LONG'&&ofK.st==='kg';
   var ofGS=ofK&&ofK.dir==='SHORT'&&(ofK.st==='kgs'||ofK.st==='kg');
   var scL=scK&&scK.dir==='LONG'&&(scK.st==='kg'||scK.st==='kw');
   var scS=scK&&scK.dir==='SHORT'&&(scK.st==='kg'||scK.st==='kw');
+  var trendL=trendK&&trendK.dir==='LONG';
+  var trendS=trendK&&trendK.dir==='SHORT';
+  var cvdL=cvdK&&cvdK.dir==='LONG';
+  var cvdS=cvdK&&cvdK.dir==='SHORT';
+  var fundL=fundK&&fundK.dir==='LONG';
+  var fundS=fundK&&fundK.dir==='SHORT';
+  // 5 kritik faktör trafik ışığı (OF, Scalp, Trend, CVD, Fonlama)
+  var greenL=[ofGL,scL,trendL,cvdL,fundL].filter(Boolean).length;
+  var greenS=[ofGS,scS,trendS,cvdS,fundS].filter(Boolean).length;
+  var teyitOkL=S._scalpTeyit&&S._scalpTeyit.dir==='LONG';
+  var teyitOkS=S._scalpTeyit&&S._scalpTeyit.dir==='SHORT';
 
   var karar='BEKLE',kC='var(--Y)',kBg='rgba(251,191,36,.06)',kBd='rgba(251,191,36,.3)',kDet='';
-  if(lSc>=10&&ofGL&&scL){
-    karar='LONG GİR';kC='var(--G)';kBg='rgba(0,217,126,.08)';kBd='rgba(0,217,126,.4)';kDet='✅ '+lSc.toFixed(1)+'/'+maxSc+' OF:ALIM Scalp:LONG';
-    if(!S._lastKararDir||S._lastKararDir!=='LONG'||(Date.now()-S._lastKararTs)>300000){
+  if(greenL>=4&&ofGL&&scL){
+    karar='LONG GİR';kC='var(--G)';kBg='rgba(0,217,126,.08)';kBd='rgba(0,217,126,.4)';kDet='✅ '+greenL+'/5 kriter yeşil · '+lSc.toFixed(1)+'/'+maxSc;
+    if(!S._lastKararDir||S._lastKararDir!=='LONG'||(Date.now()-S._lastKararTs)>900000){
       S._lastKararDir='LONG';S._lastKararTs=Date.now();
-      tgSend('🟢 <b>LONG GİR</b>\n$'+Math.round(p).toLocaleString('tr-TR')+' Puan:'+lSc.toFixed(1)+'/'+maxSc+'\n'+new Date().toLocaleTimeString('tr-TR'));
+      tgSend('🟢 <b>LONG GİR</b>\n$'+Math.round(p).toLocaleString('tr-TR')+' Kriter:'+greenL+'/5 Puan:'+lSc.toFixed(1)+'/'+maxSc+(teyitOkL?' ✅TEYİT':'')+'\n'+new Date().toLocaleTimeString('tr-TR'));
     }
-  }else if(sSc>=10&&ofGS&&scS){
-    karar='SHORT GİR';kC='var(--R)';kBg='rgba(255,59,92,.08)';kBd='rgba(255,59,92,.4)';kDet='✅ '+sSc.toFixed(1)+'/'+maxSc+' OF:SATIŞ Scalp:SHORT';
-    if(!S._lastKararDir||S._lastKararDir!=='SHORT'||(Date.now()-S._lastKararTs)>300000){
+  }else if(greenS>=4&&ofGS&&scS){
+    karar='SHORT GİR';kC='var(--R)';kBg='rgba(255,59,92,.08)';kBd='rgba(255,59,92,.4)';kDet='✅ '+greenS+'/5 kriter kırmızı · '+sSc.toFixed(1)+'/'+maxSc;
+    if(!S._lastKararDir||S._lastKararDir!=='SHORT'||(Date.now()-S._lastKararTs)>900000){
       S._lastKararDir='SHORT';S._lastKararTs=Date.now();
-      tgSend('🔴 <b>SHORT GİR</b>\n$'+Math.round(p).toLocaleString('tr-TR')+' Puan:'+sSc.toFixed(1)+'/'+maxSc+'\n'+new Date().toLocaleTimeString('tr-TR'));
+      tgSend('🔴 <b>SHORT GİR</b>\n$'+Math.round(p).toLocaleString('tr-TR')+' Kriter:'+greenS+'/5 Puan:'+sSc.toFixed(1)+'/'+maxSc+(teyitOkS?' ✅TEYİT':'')+'\n'+new Date().toLocaleTimeString('tr-TR'));
     }
-  }else if(lSc>=9&&(ofGL||scL)){karar='LONG DÜŞÜNEBİLİRSİN';kC='var(--G)';kBg='rgba(0,217,126,.04)';kBd='rgba(0,217,126,.2)';kDet='⚠ '+lSc.toFixed(1)+'/'+maxSc+' Teyit bekle';}
-  else if(sSc>=9&&(ofGS||scS)){karar='SHORT DÜŞÜNEBİLİRSİN';kC='var(--R)';kBg='rgba(255,59,92,.04)';kBd='rgba(255,59,92,.2)';kDet='⚠ '+sSc.toFixed(1)+'/'+maxSc+' Teyit bekle';}
-  else{kDet='L:'+lSc.toFixed(1)+' S:'+sSc.toFixed(1)+'/'+maxSc;}
+  }else if(greenL>=3&&(ofGL||scL)){karar='LONG DÜŞÜNEBİLİRSİN';kC='var(--G)';kBg='rgba(0,217,126,.04)';kBd='rgba(0,217,126,.2)';kDet='⚠ '+greenL+'/5 yeşil · Teyit bekle';}
+  else if(greenS>=3&&(ofGS||scS)){karar='SHORT DÜŞÜNEBİLİRSİN';kC='var(--R)';kBg='rgba(255,59,92,.04)';kBd='rgba(255,59,92,.2)';kDet='⚠ '+greenS+'/5 kırmızı · Teyit bekle';}
+  else{kDet='L:'+lSc.toFixed(1)+' S:'+sSc.toFixed(1)+'/'+maxSc+' ('+greenL+'/5 · '+greenS+'/5)';}
 
   var kTp=null,kSl=null,kRr=null;
   if(sc&&sc.sig!=='BEKLE'&&sc.tp&&!sc.isChop){kTp=sc.tp;kSl=sc.sl;}
@@ -1231,6 +1254,18 @@ function renKarar(){
     if(kRr)html+='<span style="font-family:\'IBM Plex Mono\',monospace;font-size:11px">R/R:<b style="color:var(--P)">'+kRr+'x</b></span>';
     html+='</div>';
   }
+  html+='</div>';
+  // 5 KRİTER TRAFİK IŞIĞI
+  html+='<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">';
+  [{lbl:'OF',gl:ofGL,gs:ofGS},{lbl:'SCALP',gl:scL,gs:scS},{lbl:'TREND',gl:trendL,gs:trendS},{lbl:'CVD',gl:cvdL,gs:cvdS},{lbl:'FNLM',gl:fundL,gs:fundS}].forEach(function(f){
+    var col=f.gl?'var(--G)':f.gs?'var(--R)':'var(--dim)';
+    var bg=f.gl?'rgba(0,217,126,.1)':f.gs?'rgba(255,59,92,.1)':'rgba(74,106,148,.1)';
+    var ico=f.gl?'▲':f.gs?'▼':'━';
+    html+='<div style="flex:1;min-width:50px;padding:6px 4px;background:'+bg+';border:1px solid '+col+';border-radius:7px;text-align:center">'
+      +'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:14px;color:'+col+'">'+ico+'</div>'
+      +'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:8px;color:var(--t2);margin-top:2px">'+f.lbl+'</div>'
+      +'</div>';
+  });
   html+='</div>';
   html+='<div class="kgrid">';
   krits.forEach(function(k){
@@ -1653,6 +1688,8 @@ function tgBake(){
 // ─── VERİ YÜKLEYİCİLER ───
 function parsePrice(j){
   if(!j)return null;
+  // Bybit v5
+  if(j.result&&j.result.list&&j.result.list[0]){var b=j.result.list[0];var bp=parseFloat(b.lastPrice||0),bop=parseFloat(b.prevPrice24h||bp);return{p:bp,c:bop>0?(bp-bop)/bop*100:0,h:parseFloat(b.highPrice24h||0),l:parseFloat(b.lowPrice24h||0),v:parseFloat(b.volume24h||0)};}
   if(j.lastPrice)return{p:parseFloat(j.lastPrice),c:parseFloat(j.priceChangePercent||0),h:parseFloat(j.highPrice||0),l:parseFloat(j.lowPrice||0),v:parseFloat(j.volume||0)};
   if(j.bitcoin)return{p:j.bitcoin.usd,c:j.bitcoin.usd_24h_change||0,h:0,l:0,v:0};
   if(j.result&&j.result.XXBTZUSD){var k2=j.result.XXBTZUSD;return{p:parseFloat(k2.c[0]),c:0,h:parseFloat(k2.h[1]),l:parseFloat(k2.l[1]),v:parseFloat(k2.v[1])};}
@@ -1669,34 +1706,30 @@ function ph(ms,arr){return Promise.race([Promise.all(arr),new Promise(function(r
 
 async function loadPrice(){
   if(S.ofConn&&S.price>0)return;
-  var urls=['https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true',
+  var urls=[
+    'https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT',
+    'https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT',
+    'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true',
     'https://api.kraken.com/0/public/Ticker?pair=XBTUSD',
     'https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT',
-    'https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT',
-    'https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT'];
+    'https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT'
+  ];
   var res=await Promise.all(urls.map(function(u){return apiFetch('price',u,function(j){return j;}).catch(function(){return null;});}));
   for(var i=0;i<res.length;i++){var parsed=parsePrice(res[i]);if(parsed&&parsed.p>1000){S.prev=S.price||parsed.p;S.price=parsed.p;S.chg24h=parsed.c;if(parsed.h)S.high24h=parsed.h;if(parsed.l)S.low24h=parsed.l;if(parsed.v)S.vol24h=parsed.v;S.status['price']='ok';break;}}
 }
 async function loadFunding(){
-  var d=await apiFetch('funding','https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1',function(j){return j&&j[0]?j[0]:null;});
-  if(d&&d.fundingRate!=null){var nf=parseFloat(d.fundingRate);if(S.funding!==null)S.fundHistory.push(S.funding);if(S.fundHistory.length>8)S.fundHistory.shift();S.funding=nf;return;}
-  var d2=await apiFetch('funding','https://api.bitget.com/api/v2/mix/market/current-fund-rate?productType=USDT-FUTURES&symbol=BTCUSDT',function(j){return j&&j.data&&j.data[0]?j.data[0]:null;});
+  var db=await apiFetch("funding","https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT",function(j){return j&&j.result&&j.result.list&&j.result.list[0]?j.result.list[0]:null;});
+  if(db&&db.fundingRate!=null){var nf=parseFloat(db.fundingRate);if(S.funding!==null)S.fundHistory.push(S.funding);if(S.fundHistory.length>8)S.fundHistory.shift();S.funding=nf;return;}
+  var d=await apiFetch("funding","https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1",function(j){return j&&j[0]?j[0]:null;});
+  if(d&&d.fundingRate!=null){var nf2=parseFloat(d.fundingRate);if(S.funding!==null)S.fundHistory.push(S.funding);if(S.fundHistory.length>8)S.fundHistory.shift();S.funding=nf2;return;}
+  var d2=await apiFetch("funding","https://api.bitget.com/api/v2/mix/market/current-fund-rate?productType=USDT-FUTURES&symbol=BTCUSDT",function(j){return j&&j.data&&j.data[0]?j.data[0]:null;});
   if(d2&&d2.fundingRate!=null){S.funding=parseFloat(d2.fundingRate);}
 }
-async function loadFG(){
-  var d=await apiFetch('fg','https://api.alternative.me/fng/?limit=1',function(j){return j&&j.data&&j.data[0]?j.data[0]:null;});
-  if(d)S.fg={value:parseInt(d.value),label:d.value_classification};
-}
-async function loadBTCDom(){
-  var d=await apiFetch('dom','https://api.coinpaprika.com/v1/global',function(j){return j;});
-  if(d&&d.bitcoin_dominance_percentage!=null)S.btcDom=d.bitcoin_dominance_percentage;
-}
 async function loadOI(){
-  var d=await apiFetch('oi','https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT',function(j){return j;});
-  if(d&&d.openInterest&&S.price){
-    var ov=parseFloat(d.openInterest)*S.price;
-    if(ov>0){S.oiChange=S.oi?((ov-S.oi)/S.oi)*100:0;S.oi=ov;S.status['oi']='ok';}
-  }
+  var db=await apiFetch("oi","https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT",function(j){return j&&j.result&&j.result.list&&j.result.list[0]?j.result.list[0]:null;});
+  if(db&&db.openInterestValue){var ov=parseFloat(db.openInterestValue);if(ov>0){S.oiChange=S.oi?((ov-S.oi)/S.oi)*100:0;S.oi=ov;S.status["oi"]="ok";return;}}
+  var d=await apiFetch("oi","https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT",function(j){return j;});
+  if(d&&d.openInterest&&S.price){var ov2=parseFloat(d.openInterest)*S.price;if(ov2>0){S.oiChange=S.oi?((ov2-S.oi)/S.oi)*100:0;S.oi=ov2;S.status["oi"]="ok";}}
 }
 async function loadLS(){
   var d=await apiFetch('ls','https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=5m&limit=1',function(j){return j&&j[0]?j[0]:null;});
