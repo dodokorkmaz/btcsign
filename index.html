@@ -927,7 +927,7 @@ function renPrice(){
   if(hb){
     var criticalKeys=['price','kl1h','kl15m','kl4h'];
     var errs=criticalKeys.filter(function(k){return S.status[k]==='err';}).length;
-    var allErrs=Object.keys(S.status).filter(function(k){return S.status[k]==='err';}).length;
+    var allErrs=Object.keys(S.status).filter(function(k){return S.status[k]==='err'&&k.indexOf('_f')!==0;}).length;
     hb.style.display='';
     if(errs>=2){hb.textContent='⛔ '+allErrs+' HATA';hb.style.cssText='background:rgba(255,59,92,.2);color:var(--R);border:1px solid rgba(255,59,92,.5);font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 8px;border-radius:4px';}
     else if(allErrs>0){hb.textContent='⚠ '+allErrs+' uyarı';hb.style.cssText='background:rgba(251,191,36,.1);color:var(--Y);border:1px solid rgba(251,191,36,.25);font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 8px;border-radius:4px';}
