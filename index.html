@@ -1732,19 +1732,19 @@ async function loadKlines(tf){
   function parseBybit(j){if(!j||!j.result||!j.result.list||j.result.list.length<10)return false;var d=[].concat(j.result.list).reverse();op=d.map(function(c){return parseFloat(c[1]);});hi=d.map(function(c){return parseFloat(c[2]);});lo=d.map(function(c){return parseFloat(c[3]);});cl=d.map(function(c){return parseFloat(c[4]);});vols=d.map(function(c){return parseFloat(c[5]);});return cl.length>=10;}
   var fetches=[];
   if(bnMap[tf]){
-    fetches.push(apiFetch('kl'+tf,'https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval='+bnMap[tf]+'&limit='+lim,function(j){return j;}).then(function(d){return{src:'bn',d:d};}));
-    fetches.push(apiFetch('kl'+tf,'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval='+bnMap[tf]+'&limit='+lim,function(j){return j;}).then(function(d){return{src:'bn',d:d};}));
+    fetches.push(apiFetch('_f'+tf+'1','https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval='+bnMap[tf]+'&limit='+lim,function(j){return j;}).then(function(d){return{src:'bn',d:d};}));
+    fetches.push(apiFetch('_f'+tf+'2','https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval='+bnMap[tf]+'&limit='+lim,function(j){return j;}).then(function(d){return{src:'bn',d:d};}));
   }
-  if(okxMap[tf])fetches.push(apiFetch('kl'+tf,'https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar='+okxMap[tf]+'&limit='+Math.min(lim,300),function(j){return j;}).then(function(d){return{src:'okx',d:d};}));
-  if(bybitMap[tf])fetches.push(apiFetch('kl'+tf,'https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval='+bybitMap[tf]+'&limit='+Math.min(lim,200),function(j){return j;}).then(function(d){return{src:'bybit',d:d};}));
+  if(okxMap[tf])fetches.push(apiFetch('_f'+tf+'3','https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar='+okxMap[tf]+'&limit='+Math.min(lim,300),function(j){return j;}).then(function(d){return{src:'okx',d:d};}));
+  if(bybitMap[tf])fetches.push(apiFetch('_f'+tf+'4','https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval='+bybitMap[tf]+'&limit='+Math.min(lim,200),function(j){return j;}).then(function(d){return{src:'bybit',d:d};}));
   var all=await Promise.all(fetches.map(function(p){return p.catch(function(){return null;});}));
   for(var i=0;i<all.length;i++){
     var res=all[i];if(!res||!res.d)continue;
     var ok=res.src==='okx'?parseOKX(res.d):res.src==='bybit'?parseBybit(res.d):parseBN(res.d);
     if(ok){break;}else cl=null;
   }
-  if(!cl||cl.length<10)return;
-  if(!cl.every(function(v){return !isNaN(v)&&v>0;}))return;
+  if(!cl||cl.length<10){S.status['kl'+tf]='err';return;}
+  if(!cl.every(function(v){return !isNaN(v)&&v>0;})){S.status['kl'+tf]='err';return;}
   if(tf==='1m'){S.c1m=cl;S.h1m=hi;S.l1m=lo;S.o1m=op;S.status['kl1m']='ok';}
   if(tf==='3m'){S.c3m=cl;S.h3m=hi;S.l3m=lo;S.o3m=op;S.status['kl3m']='ok';}
   if(tf==='5m'){S.c5m=cl;S.h5m=hi;S.l5m=lo;S.o5m=op;S.status['kl5m']='ok';}
