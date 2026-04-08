@@ -236,7 +236,7 @@ input,select{font-size:16px!important}
   <div class="tc" id="tc-liq">
     <div class="chart-wrap" style="padding:12px;margin-bottom:12px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--t2);letter-spacing:2px">📍 LİKİDASYON HARİTASI · BTC · Coinglass</div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--t2);letter-spacing:2px">📍 LİKİDASYON HARİTASI · TAHMİNİ · OI+Kaldıraç</div>
         <button onclick="loadLiqMap(true)" style="background:rgba(61,158,255,.1);border:1px solid rgba(61,158,255,.25);border-radius:5px;color:var(--B);padding:3px 10px;font-family:'IBM Plex Mono',monospace;font-size:9px;cursor:pointer">↻ Yenile</button>
       </div>
       <canvas id="liqCanvas" height="360" style="width:100%;display:block"></canvas>
@@ -1726,34 +1726,47 @@ async function loadKlines(tf){
   S.ema[tf]={e20:emaVal(cl,Math.min(20,cl.length)),e50:emaVal(cl,Math.min(50,cl.length)),e200:emaVal(cl,Math.min(200,cl.length))};
 }
 async function loadLiqMap(force){
-  if(!S.cgKey)return;
-  if(!force&&S.liqMap&&(Date.now()-S.liqMapTs)<120000)return;
-  var url='https://open-api-v4.coinglass.com/api/futures/liquidation/aggregated-map?symbol=BTC';
-  var proxies=[
-    'https://corsproxy.io/?'+encodeURIComponent(url),
-    'https://api.allorigins.win/raw?url='+encodeURIComponent(url),
-    url
+  // Sentetik likidasyon haritası - OI + kaldıraç seviyelerinden hesaplama
+  var p=S.price;if(!p)return;
+  var oi=S.oi||6000000000;
+  // Kaldıraç dağılımı (gerçek piyasa istatistiklerine dayalı tahmin)
+  var leverages=[
+    {lev:5,  pct:0.08, label:'5x'},
+    {lev:10, pct:0.22, label:'10x'},
+    {lev:20, pct:0.28, label:'20x'},
+    {lev:25, pct:0.12, label:'25x'},
+    {lev:50, pct:0.18, label:'50x'},
+    {lev:100,pct:0.12, label:'100x'}
   ];
-  for(var i=0;i<proxies.length;i++){
-    try{
-      var headers={'Content-Type':'application/json'};
-      if(i===proxies.length-1)headers['CG-API-KEY']=S.cgKey;
-      var r=await fetch(proxies[i],{headers:headers});
-      if(!r.ok)continue;
-      var j=await r.json();
-      if(j&&j.code==='0'&&j.data){S.liqMap=j.data;S.liqMapTs=Date.now();toast('📍 Liq Map güncellendi',2000);return;}
-      if(j&&j.data){S.liqMap=j.data;S.liqMapTs=Date.now();toast('📍 Liq Map güncellendi',2000);return;}
-    }catch(e){}
-  }
-  toast('⚠ Liq Map: API erişim sorunu',3000);
+  var liqLong=[],liqShort=[];
+  var lsR=S.lsRatio||1;
+  // Long likidasyon: fiyat düştüğünde (shortların mıknatısı)
+  leverages.forEach(function(lv){
+    var dropPct=1/lv.lev-0.005; // maintenance margin
+    var liqP=Math.round(p*(1-dropPct));
+    var usd=oi*lv.pct*(lsR>1?lsR*0.6:0.4); // L/S oranına göre ağırlık
+    liqLong.push({price:liqP,usd:usd,label:lv.label});
+    // Biraz dağıtım ekle
+    liqLong.push({price:Math.round(liqP*0.997),usd:usd*0.4,label:lv.label});
+    liqLong.push({price:Math.round(liqP*1.003),usd:usd*0.4,label:lv.label});
+  });
+  // Short likidasyon: fiyat yükseldiğinde (longların mıknatısı)
+  leverages.forEach(function(lv){
+    var risePct=1/lv.lev-0.005;
+    var liqP=Math.round(p*(1+risePct));
+    var usd=oi*lv.pct*(lsR<1?1/lsR*0.6:0.4);
+    liqShort.push({price:liqP,usd:usd,label:lv.label});
+    liqShort.push({price:Math.round(liqP*0.997),usd:usd*0.4,label:lv.label});
+    liqShort.push({price:Math.round(liqP*1.003),usd:usd*0.4,label:lv.label});
+  });
+  S.liqMap={longLiqLevels:liqLong,shortLiqLevels:liqShort,synthetic:true};
+  S.liqMapTs=Date.now();
+  toast('📍 Liq Map hesaplandı (tahmini)',2000);
 }
 
 function renLiq(){
-  if(!S.liqMap){
-    loadLiqMap();
-    var pp=ge('liqInfo');if(pp)pp.innerHTML='<div style="text-align:center;padding:20px;color:var(--t2);font-size:11px">Yükleniyor...</div>';
-    return;
-  }
+  if(!S.liqMap||!S.price){loadLiqMap();drawLiqMap();var pp=ge('liqInfo');if(pp)pp.innerHTML='<div style="text-align:center;padding:20px;color:var(--t2);font-size:11px">Hesaplanıyor...</div>';return;}
+  if((Date.now()-S.liqMapTs)>120000)loadLiqMap();
   drawLiqMap();
   var pp=ge('liqInfo');if(!pp)return;
   var d=S.liqMap,p=S.price||0;
@@ -1761,7 +1774,7 @@ function renLiq(){
   var shortLevels=(d.shortLiqLevels||d.shortLevels||[]);
   var topLong=longLevels.sort(function(a,b){return (b.usd||b.amount||0)-(a.usd||a.amount||0);}).slice(0,3);
   var topShort=shortLevels.slice().sort(function(a,b){return (b.usd||b.amount||0)-(a.usd||a.amount||0);}).slice(0,3);
-  var html='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--t2);letter-spacing:2px;margin-bottom:8px">EN BÜYÜK LİKİDASYON BÖLGELERİ</div>';
+  var html='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:9px;color:var(--t2);letter-spacing:2px;margin-bottom:8px">EN BÜYÜK LİKİDASYON BÖLGELERİ <span style="color:var(--Y);font-size:8px">[TAHMİNİ · OI+Kaldıraç]</span></div>';
   html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
   html+='<div><div style="font-size:9px;color:var(--G);margin-bottom:5px">▲ SHORT LİKİ (Fiyat yükselirse)</div>';
   topShort.forEach(function(l){var usd=(l.usd||l.amount||0);html+='<div style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:4px 0;border-bottom:1px solid var(--dim2)"><span style="color:var(--R)">'+fUSD(l.price||0)+'</span> <span style="color:var(--t2)">$'+Math.round(usd/1000000*10)/10+'M</span></div>';});
