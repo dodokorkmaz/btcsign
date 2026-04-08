@@ -1811,6 +1811,7 @@ function drawLiqMap(){
 }
 
 
+function calcFundCd(){
   var now=Date.now(),d=new Date(now),uh=d.getUTCHours(),um=d.getUTCMinutes(),us=d.getUTCSeconds();
   var tot=uh*3600+um*60+us,per=8*3600,el=tot%per,next=(per-el)*1000;
   S.fundNextTs=now+next;var ts=Math.floor(next/1000),h=Math.floor(ts/3600),m=Math.floor((ts%3600)/60),s=ts%60;
